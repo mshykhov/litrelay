@@ -18,7 +18,15 @@ uv run litrelay init my-book --source /path/to/original --translation /path/to/e
 uv run litrelay run my-book
 ```
 
-Omit `--translation` to translate from scratch. Languages default to Chinese → Russian; use `--source-lang en --target-lang uk`, or another language pair. Use `--backend claude --model <model>` or `--backend openai --model <model>` to select another provider. OpenAI requires `OPENAI_API_KEY` and uses the API.
+Omit `--translation` to translate from scratch. Languages default to Chinese → Russian; use `--source-lang en --target-lang uk`, or another language pair.
+
+**Codex is the default backend**, with `gpt-5.5` as the default model. Install the Codex CLI and sign in with `codex login`. LitRelay calls the CLI directly; this backend does not require an `OPENAI_API_KEY` in LitRelay. To select it explicitly:
+
+```bash
+uv run litrelay init my-book --source /path/to/original --backend codex --model gpt-5.5
+```
+
+Use `--backend claude --model <model>` or `--backend openai --model <model>` to select another provider. The `openai` backend requires `OPENAI_API_KEY` and calls the API directly. Model names can be changed to ones available in your account.
 
 Inputs can be **numbered UTF-8 TXT files**, a combined TXT with numbered headings, or a text EPUB. Original chapters must form a complete sequence starting at 1. Existing translations can contain gaps; LitRelay fills them. Chapters supplied as existing translation are preserved. [Input details](docs/usage.md).
 
