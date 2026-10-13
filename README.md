@@ -46,6 +46,17 @@ Translation → source-based QA → automatic revision → deterministic checks 
 
 Alignment sampling checks prepared source/translation pairs; it does not prove every input chapter is correct. LitRelay cannot reconstruct text missing from an upstream mirror. Use complete originals and correctly numbered pairs. Human editorial review remains useful for publication.
 
+## Debug and run statistics
+
+```bash
+uv run litrelay run my-book --debug
+uv run litrelay stats my-book
+```
+
+Debug shows stages and chapters, elapsed time, models, concurrency, every request attempt, retries, cache hits, QA scores and export progress. Long stages print a heartbeat. JSONL events and a JSON summary are saved under `projects/my-book/work/logs/`, including failed and interrupted runs. Progress goes to stderr; stdout remains JSON.
+
+Token reports include input/output, cached input, cache writes and reasoning when available. Missing usage is `null`; known subtotals and coverage are reported separately. Cached input and reasoning are never added twice. A fully cached resume spends zero new model tokens. Provider-reported dollar estimates are kept when available; LitRelay does not invent prices. [Details, custom log paths and privacy](docs/debug.md).
+
 ## Project layout
 
 ```text

@@ -1,4 +1,5 @@
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -84,3 +85,19 @@ def test_make_requester_openai_returns_none() -> None:
 
 def test_make_requester_claude_returns_callable() -> None:
     assert callable(make_requester("claude", "claude-opus-4-8", 900))
+
+
+def test_cli_cancellation_stops_active_process_and_prevents_new_calls(tmp_path) -> None:
+    marker = tmp_path / "started"
+    run = _make_subprocess_runner(timeout=30)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(run, ["sh", "-c", f"touch {marker}; sleep 30"], "")
+        deadline = time.monotonic() + 3
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert marker.exists()
+        run.cancel()
+        with pytest.raises(RuntimeError):
+            future.result(timeout=3)
+    with pytest.raises(RuntimeError, match="canceled"):
+        run(["cat"], "must not start")

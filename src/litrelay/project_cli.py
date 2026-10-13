@@ -8,8 +8,9 @@ from litrelay.project_config import initialize_project
 from litrelay.project_scaffold import _validate_slug
 from litrelay.project_workflow import export_project, project_status, run_project
 from litrelay.prompt_profiles import STYLES
+from litrelay.telemetry import latest_summary
 
-COMMANDS = {"init", "run", "status", "export", "profiles", "reader"}
+COMMANDS = {"init", "run", "status", "export", "profiles", "reader", "stats"}
 
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
@@ -28,13 +29,14 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     init.add_argument("--backend", choices=["codex", "claude", "openai"], default="codex")
     init.add_argument("--model", default="gpt-5.5")
     init.add_argument("--min-chars", type=int, default=100)
-    for command in ["run", "status", "export"]:
+    for command in ["run", "status", "export", "stats"]:
         parser = subparsers.add_parser(
             command,
             help={
                 "run": "Translate missing chapters, verify and export the complete book",
                 "status": "Show local progress without calling a model",
                 "export": "Package verified chapters as TXT, EPUB and ZIP",
+                "stats": "Read the latest debug run summary without calling a model",
             }[command],
         )
         parser.add_argument("name")
@@ -42,6 +44,10 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         if command == "run":
             parser.add_argument("--max-chapters", type=int)
             parser.add_argument("--dry-run", action="store_true")
+            parser.add_argument("--debug", action="store_true", help="Live stage progress and durable run telemetry")
+            parser.add_argument(
+                "--log-file", type=Path, help="Append debug events to this JSONL file (implies --debug)"
+            )
     subparsers.add_parser("profiles", help="List built-in literary translation profiles")
     reader = subparsers.add_parser("reader", help="Optional Reader CMS delivery integration")
     sync = reader.add_subparsers(dest="reader_command", required=True).add_parser("sync")
@@ -111,8 +117,10 @@ def execute(args: argparse.Namespace) -> int:
             result = project_status(project)
         elif args.command == "export":
             result = export_project(project)
+        elif args.command == "stats":
+            result = latest_summary(project)
         else:
-            result = run_project(project, max_chapters=args.max_chapters)
+            result = run_project(project, max_chapters=args.max_chapters, debug=args.debug, log_file=args.log_file)
         summary = {k: v for k, v in result.items() if k not in {"chapters", "fingerprint"}}
         if "missing" in summary:
             summary["missing_preview"] = summary.pop("missing")[:20]

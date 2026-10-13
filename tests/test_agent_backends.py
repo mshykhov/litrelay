@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from litrelay.agent_backends import build_cli_requester
 from litrelay.agent_executor import extract_response_text
 
@@ -109,3 +111,64 @@ def test_codex_translation_worker_uses_read_only_sandbox() -> None:
     build_cli_requester("codex", runner=runner)({"input": []})
     assert "--dangerously-bypass-approvals-and-sandbox" not in captured["argv"]
     assert captured["argv"][captured["argv"].index("--sandbox") + 1] == "read-only"
+
+
+def test_claude_json_result_preserves_text_usage_and_reported_cost() -> None:
+    captured = []
+    usage = {"input_tokens": 10, "cache_read_input_tokens": 50, "cache_creation_input_tokens": 30, "output_tokens": 20}
+
+    def runner(argv, prompt):
+        captured.extend(argv)
+        return json.dumps(
+            {
+                "type": "result",
+                "result": '{"chapter_id":"0001"}',
+                "usage": usage,
+                "total_cost_usd": 0.005,
+                "is_error": False,
+            }
+        )
+
+    response = build_cli_requester("claude", runner=runner)({"input": []})
+    assert extract_response_text(response) == '{"chapter_id":"0001"}'
+    assert response["usage"] == usage
+    assert response["reported_cost_usd"] == 0.005
+    assert captured[captured.index("--output-format") + 1] == "json"
+
+
+def test_claude_json_error_does_not_become_translation() -> None:
+    requester = build_cli_requester(
+        "claude",
+        runner=lambda argv, prompt: json.dumps({"type": "result", "result": "Auth unavailable", "is_error": True}),
+    )
+    with pytest.raises(RuntimeError, match="Auth unavailable"):
+        requester({"input": []})
+
+
+def test_claude_error_preserves_reported_usage_for_telemetry(tmp_path) -> None:
+    from litrelay.agent_executor import run_agent_tasks
+
+    tasks = tmp_path / "tasks.jsonl"
+    tasks.write_text(
+        json.dumps({"custom_id": "t", "agent": "x", "system": "s", "input": {}, "expected_output": {"format": "text"}})
+        + "\n"
+    )
+    requester = build_cli_requester(
+        "claude",
+        runner=lambda argv, prompt: json.dumps(
+            {
+                "type": "result",
+                "result": "provider error",
+                "is_error": True,
+                "usage": {"input_tokens": 5, "output_tokens": 1},
+                "total_cost_usd": 0.002,
+            }
+        ),
+    )
+    events = []
+    summary = run_agent_tasks(
+        tasks, tmp_path / "result.jsonl", model="fake", requester=requester, event_handler=events.append
+    )
+    assert summary.failed == 1
+    finished = next(e for e in events if e["event"] == "task_finished")
+    assert finished["usage"]["input_tokens"] == 5 and finished["reported_cost_usd"] == 0.002

@@ -7,11 +7,20 @@ import signal
 import subprocess
 import tempfile
 from collections.abc import Callable
+from threading import Event, Lock
 from typing import Any
 
 CliRunner = Callable[[list[str], str], str]
 
 _FENCE_RE = re.compile(r"^```[a-zA-Z0-9]*\n?|\n?```$")
+
+
+class BackendError(RuntimeError):
+    def __init__(self, message: str, *, code: str, usage: dict | None = None, cost: float | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.usage = usage or {}
+        self.reported_cost_usd = cost
 
 
 def _cli_argv(backend: str, model: str | None) -> list[str]:
@@ -22,6 +31,8 @@ def _cli_argv(backend: str, model: str | None) -> list[str]:
         argv = [
             "claude",
             "-p",
+            "--output-format",
+            "json",
             "--max-turns",
             "1",
             "--disallowedTools",
@@ -71,18 +82,36 @@ def build_cli_requester(
     def requester(payload: dict[str, Any]) -> dict[str, Any]:
         prompt = _build_prompt(payload)
         raw = run(argv, prompt)
+        cost = None
         if backend == "codex":
             answer, usage = _parse_codex_jsonl(raw)
         else:
             answer, usage = raw, {}
+            try:
+                result = json.loads(raw)
+            except json.JSONDecodeError:
+                result = None
+            if isinstance(result, dict) and result.get("type") == "result":
+                usage = result.get("usage") or {}
+                cost = result.get("total_cost_usd")
+                if result.get("is_error"):
+                    raise BackendError(
+                        f"Claude CLI error: {result.get('result', result.get('subtype', 'unknown'))}",
+                        code="claude_result_error",
+                        usage=usage,
+                        cost=cost,
+                    )
+                answer = result.get("result", "")
         text = _extract_output(answer, payload)
         return {
             "id": f"cli-{backend}",
             "model": payload.get("model", model or backend),
             "output": [{"content": [{"type": "output_text", "text": text}]}],
             "usage": usage,
+            "reported_cost_usd": cost,
         }
 
+    requester.cancel = getattr(run, "cancel", lambda: None)
     return requester
 
 
@@ -151,30 +180,50 @@ def _extract_json_object(text: str) -> str:
 
 
 def _make_subprocess_runner(timeout: int) -> CliRunner:
+    active: set[subprocess.Popen] = set()
+    lock = Lock()
+    canceled = Event()
+
+    def cancel() -> None:
+        with lock:
+            canceled.set()
+            processes = list(active)
+        for process in processes:
+            _kill_group(process)
+
     def run(argv: list[str], prompt: str) -> str:
         with (
             tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as out,
             tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as err,
         ):
-            process = subprocess.Popen(
-                argv,
-                stdin=subprocess.PIPE,
-                stdout=out,
-                stderr=err,
-                text=True,
-                start_new_session=True,
-            )
+            with lock:
+                if canceled.is_set():
+                    raise BackendError("CLI request canceled", code="cli_canceled")
+                process = subprocess.Popen(
+                    argv, stdin=subprocess.PIPE, stdout=out, stderr=err, text=True, start_new_session=True
+                )
+                active.add(process)
             try:
                 process.communicate(input=prompt, timeout=timeout)
             except subprocess.TimeoutExpired:
                 _kill_group(process)
-                raise RuntimeError(f"CLI backend {argv[0]} timed out after {timeout}s") from None
+                raise BackendError(f"CLI backend {argv[0]} timed out after {timeout}s", code="cli_timeout") from None
+            except BaseException:
+                _kill_group(process)
+                raise
+            finally:
+                with lock:
+                    active.discard(process)
             out.seek(0)
             err.seek(0)
             if process.returncode != 0:
-                raise RuntimeError(f"CLI backend {argv[0]} failed: {err.read().strip()[:500]}")
+                raise BackendError(
+                    f"CLI backend {argv[0]} failed: {err.read().strip()[:500]}",
+                    code=f"cli_exit_{abs(process.returncode)}",
+                )
             return out.read()
 
+    run.cancel = cancel
     return run
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from litrelay.project_config import normalize_glossary, read_config
 from litrelay.project_storage import digest, project_lock, write_json
 from litrelay.prompt_profiles import PromptSettings
 from litrelay.prompts import build_glossary_prompt
+from litrelay.telemetry import RunTrace
 
 Requester = Callable[[dict], dict]
 
@@ -79,7 +81,15 @@ def project_status(project: Path) -> dict:
 
 
 def _batch_config(
-    project: Path, config: dict, *, batch: Path, start: int, end: int, glossary: Path, requester: Requester | None
+    project: Path,
+    config: dict,
+    *,
+    batch: Path,
+    start: int,
+    end: int,
+    glossary: Path,
+    requester: Requester | None,
+    trace: RunTrace | None = None,
 ) -> BatchConfig:
     def profile(name: str) -> StageProfile:
         p = config[name]
@@ -107,11 +117,18 @@ def _batch_config(
             int(cid), text, min_chars=config["min_chars"], target_language=config["target_language"]
         ),
         requester=requester,
+        event_handler=trace.emit if trace else None,
     )
 
 
 def _bootstrap(
-    project: Path, config: dict, source: dict[int, str], existing: dict[int, str], fp: str, requester: Requester | None
+    project: Path,
+    config: dict,
+    source: dict[int, str],
+    existing: dict[int, str],
+    fp: str,
+    requester: Requester | None,
+    trace: RunTrace | None = None,
 ) -> Path:
     batch = project / "work/bootstrap" / fp[:12]
     batch.mkdir(parents=True, exist_ok=True)
@@ -120,15 +137,21 @@ def _bootstrap(
     if ready.exists() and glossary.exists():
         data = json.loads(ready.read_text())
         if data["fingerprint"] == fp and data["glossary_sha256"] == digest(glossary.read_text()):
+            if trace:
+                trace.emit({"event": "cache_hit", "stage": "bootstrap", "count": 1})
             return glossary
     seed = project / "input/glossary.csv"
     glossary.write_text(
         seed.read_text() if seed.exists() else "source,target_ru,type,note,confidence\n", encoding="utf-8"
     )
-    cfg = _batch_config(project, config, batch=batch, start=1, end=max(source), glossary=glossary, requester=requester)
+    cfg = _batch_config(
+        project, config, batch=batch, start=1, end=max(source), glossary=glossary, requester=requester, trace=trace
+    )
     numbers = sorted(existing)
     count = min(config["glossary_samples"], len(numbers))
     chosen = [numbers[round(i * (len(numbers) - 1) / max(1, count - 1))] for i in range(count)]
+    if trace:
+        trace.emit({"event": "bootstrap_started", "samples": len(chosen)})
     if chosen:
         tasks = batch / "alignment.tasks.jsonl"
         results = batch / "alignment.results.jsonl"
@@ -182,12 +205,53 @@ def _bootstrap(
     return glossary
 
 
-def run_project(project: Path, *, requester: Requester | None = None, max_chapters: int | None = None) -> dict:
+def run_project(
+    project: Path,
+    *,
+    requester: Requester | None = None,
+    max_chapters: int | None = None,
+    debug: bool = False,
+    log_file: Path | None = None,
+) -> dict:
     if not (project / "project.json").is_file():
         raise ValueError("Unknown project; use litrelay init first")
+    trace = RunTrace(project, log_file=log_file) if debug or log_file else None
+    try:
+        result = _run_project(project, requester=requester, max_chapters=max_chapters, trace=trace)
+    except BaseException as error:
+        if trace:
+            trace.close(status="interrupted" if isinstance(error, KeyboardInterrupt) else "failed", error=error)
+        raise
+    if trace:
+        result["telemetry"] = trace.close(status="complete" if result["complete"] else "partial")
+    return result
+
+
+def _run_project(
+    project: Path, *, requester: Requester | None, max_chapters: int | None, trace: RunTrace | None
+) -> dict:
     with project_lock(project):
+        started = time.monotonic()
         config, source, existing, fp = _inputs(project)
         status = project_status(project)
+        if trace:
+            trace.emit(
+                {
+                    "event": "inputs_validated",
+                    "total": len(source),
+                    "existing": len(existing),
+                    "accepted": status["accepted"],
+                    "missing": len(status["missing"]),
+                    "duration_ms": round((time.monotonic() - started) * 1000),
+                    **{k: config[k] for k in ["source_language", "target_language", "profile"]},
+                    **{
+                        k: {field: config[k][field] for field in ["backend", "model", "concurrency"]}
+                        for k in ["translation", "support"]
+                    },
+                }
+            )
+            if status["accepted"]:
+                trace.emit({"event": "cache_hit", "stage": "accepted_chapters", "count": status["accepted"]})
         if requester is None and (status["missing"] or not status["bootstrap_ready"]):
             for name in ["translation", "support"]:
                 backend = config[name]["backend"]
@@ -221,20 +285,31 @@ def run_project(project: Path, *, requester: Requester | None = None, max_chapte
             missing = missing[:max_chapters]
         glossary_path = project / "work/glossary/active.csv"
         if not glossary_path.exists() or state["glossary_fingerprint"] != fp:
-            base = _bootstrap(project, config, source, existing, fp, requester)
+            base = _bootstrap(project, config, source, existing, fp, requester, trace)
             glossary_path.parent.mkdir(parents=True, exist_ok=True)
             glossary_path.write_text(base.read_text(), encoding="utf-8")
             state["glossary_fingerprint"] = fp
             write_json(progress_path, state)
         elif state["chapters"] and any(x["fingerprint"] != fp for x in state["chapters"].values()):
             raise RuntimeError("Mixed project checkpoints")
+        elif trace:
+            trace.emit({"event": "cache_hit", "stage": "bootstrap", "count": 1})
+        if trace:
+            trace.emit({"event": "bootstrap_ready", "bootstrap_ready": True})
         while missing:
             start = end = missing[0]
             while end + 1 in missing and end - start + 1 < config["batch_size"]:
                 end += 1
             batch = project / "work/batches" / f"{start:04d}-{end:04d}-{fp[:12]}"
             cfg = _batch_config(
-                project, config, batch=batch, start=start, end=end, glossary=glossary_path, requester=requester
+                project,
+                config,
+                batch=batch,
+                start=start,
+                end=end,
+                glossary=glossary_path,
+                requester=requester,
+                trace=trace,
             )
             report = run_batch(cfg)
             if report.qa_failed or report.published != end - start + 1:
@@ -259,11 +334,33 @@ def run_project(project: Path, *, requester: Requester | None = None, max_chapte
                     "batch": str(batch.relative_to(project)),
                 }
                 missing.remove(n)
+                if trace:
+                    trace.emit(
+                        {
+                            "event": "chapter_accepted",
+                            "chapter": n,
+                            "status": "generated",
+                            "accepted": len(state["chapters"]),
+                            "total": len(source),
+                            "scores": scores[str(n)],
+                        }
+                    )
             glossary_path.write_text(report.next_glossary_csv.read_text(), encoding="utf-8")
             write_json(project / "work/progress.json", state)
         result = project_status(project)
         if result["complete"]:
+            started = time.monotonic()
+            if trace:
+                trace.emit({"event": "export_started", "total": len(source)})
             result = export_project(project)
+            if trace:
+                trace.emit(
+                    {
+                        "event": "export_finished",
+                        "formats": list(result["outputs"]),
+                        "duration_ms": round((time.monotonic() - started) * 1000),
+                    }
+                )
         return result
 
 

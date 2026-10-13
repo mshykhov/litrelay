@@ -150,6 +150,7 @@ def run_agent_tasks(
     concurrency: int = 1,
     max_retries: int = 0,
     task_timeout: float | None = None,
+    event_handler: Callable[[dict[str, Any]], None] | None = None,
 ) -> AgentRunSummary:
     existing_ids = _read_completed_ids(output_jsonl) if resume else set()
     output_jsonl.parent.mkdir(parents=True, exist_ok=True)
@@ -173,6 +174,8 @@ def run_agent_tasks(
             task = json.loads(line)
             if task["custom_id"] in existing_ids:
                 skipped += 1
+                if event_handler:
+                    event_handler({"event": "cache_hit", "task_id": task["custom_id"], "agent": task["agent"]})
                 continue
             pending.append(task)
 
@@ -183,13 +186,48 @@ def run_agent_tasks(
             max_output_tokens=max_output_tokens,
             reasoning_effort=reasoning_effort,
         )
-        result = _run_single_task(task, payload, requester)
-        attempts = 0
-        while (
-            attempts < max_retries and result["status"] == "completed" and not _is_valid_output(task, result["output"])
-        ):
-            attempts += 1
+        started = time.monotonic()
+        usages = []
+        for attempt in range(1, max_retries + 2):
+            if event_handler:
+                event_handler(
+                    {
+                        "event": "task_started",
+                        "task_id": task["custom_id"],
+                        "agent": task["agent"],
+                        "model": model,
+                        "attempt": attempt,
+                        "input_chars": len(json.dumps(task.get("input", {}))) + len(task.get("system", "")),
+                    }
+                )
             result = _run_single_task(task, payload, requester)
+            valid = result["status"] == "completed" and _is_valid_output(task, result["output"])
+            usages.append(result.get("usage", {}))
+            if event_handler:
+                event_handler(
+                    {
+                        "event": "task_finished",
+                        "task_id": task["custom_id"],
+                        "agent": task["agent"],
+                        "model": result.get("model") or model,
+                        "attempt": attempt,
+                        "status": result["status"],
+                        "valid_output": valid,
+                        "duration_ms": result["duration_ms"],
+                        "usage": result.get("usage", {}),
+                        "output_chars": len(result.get("output", "")),
+                        "response_id": result.get("response_id"),
+                        "reported_cost_usd": result.get("reported_cost_usd"),
+                        "error": result.get("error"),
+                        "error_type": result.get("error_type"),
+                        "error_code": result.get("error_code"),
+                    }
+                )
+            if result["status"] != "completed" or valid:
+                break
+        result["attempts"] = attempt
+        result["attempt_usage"] = usages
+        result["total_duration_ms"] = int((time.monotonic() - started) * 1000)
         return result
 
     completed = 0
@@ -199,6 +237,17 @@ def run_agent_tasks(
 
         def record(result: dict[str, Any]) -> None:
             nonlocal completed, failed
+            if task_timeout is not None and result.get("total_duration_ms", 0) > task_timeout * 1000:
+                if not result.get("deadline_exceeded") and event_handler:
+                    event_handler(
+                        {
+                            "event": "task_timeout",
+                            "task_id": result["custom_id"],
+                            "error_code": "task_timeout",
+                            "duration_ms": result["total_duration_ms"],
+                        }
+                    )
+                result["deadline_exceeded"] = True
             if result["status"] == "completed":
                 completed += 1
             else:
@@ -217,10 +266,26 @@ def run_agent_tasks(
                     try:
                         record(future.result(timeout=task_timeout))
                     except FuturesTimeoutError:
-                        future.cancel()
-                        record(_timeout_result(task, task_timeout))
+                        if event_handler:
+                            event_handler(
+                                {
+                                    "event": "task_timeout",
+                                    "task_id": task["custom_id"],
+                                    "error_code": "task_timeout",
+                                    "duration_ms": round(task_timeout * 1000),
+                                }
+                            )
+                        if future.cancel():
+                            result = _timeout_result(task, task_timeout)
+                        else:
+                            result = future.result()
+                        result["deadline_exceeded"] = True
+                        record(result)
+            except BaseException:
+                getattr(requester, "cancel", lambda: None)()
+                raise
             finally:
-                executor.shutdown(wait=False, cancel_futures=True)
+                executor.shutdown(wait=True, cancel_futures=True)
         else:
             for task in pending:
                 record(run_one(task))
@@ -289,6 +354,7 @@ def _run_single_task(task: dict[str, Any], payload: dict[str, Any], requester: R
             "model": response.get("model"),
             "service_tier": response.get("service_tier"),
             "usage": response.get("usage", {}),
+            "reported_cost_usd": response.get("reported_cost_usd"),
             "output": extract_response_text(response),
             "duration_ms": int((time.monotonic() - start) * 1000),
             "error": None,
@@ -301,10 +367,13 @@ def _run_single_task(task: dict[str, Any], payload: dict[str, Any], requester: R
             "response_id": None,
             "model": payload.get("model"),
             "service_tier": None,
-            "usage": {},
+            "usage": getattr(error, "usage", {}),
+            "reported_cost_usd": getattr(error, "reported_cost_usd", None),
             "output": "",
             "duration_ms": int((time.monotonic() - start) * 1000),
             "error": str(error),
+            "error_type": type(error).__name__,
+            "error_code": getattr(error, "code", None),
         }
 
 

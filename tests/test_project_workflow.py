@@ -5,6 +5,7 @@ import pytest
 
 from litrelay.project_config import initialize_project
 from litrelay.project_workflow import project_status, run_project
+from litrelay.telemetry import latest_summary
 
 
 def fake_model(calls: list):
@@ -169,3 +170,86 @@ def test_failed_alignment_never_marks_trusted_input_book_complete(tmp_path: Path
     with pytest.raises(RuntimeError, match="alignment failed"):
         run_project(project, requester=bad_alignment)
     assert not project_status(project)["complete"]
+
+
+def test_debug_tracks_real_stages_and_cache_resume_without_recounting_usage(tmp_path: Path, capsys) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "1.txt").write_text("第1章 光\n\n" + ("完整文本。" * 40))
+    project = tmp_path / "project"
+    initialize_project(project, source=source)
+    calls = []
+    base = fake_model(calls)
+
+    def measured(payload):
+        response = base(payload)
+        response["usage"] = {"input_tokens": 100, "cached_input_tokens": 60, "output_tokens": 20}
+        return response
+
+    result = run_project(project, requester=measured, debug=True)
+    trace = result["telemetry"]
+    assert trace["provider_calls"] == len(calls) == 3
+    assert trace["usage_complete"] and trace["tokens"]["total_tokens"] == 360
+    assert trace["qa_checks_passed"] == 1
+    assert trace["stages"]["qa"]["tokens"]["input_tokens"] == 100
+    events = [json.loads(line) for line in Path(trace["journal"]).read_text().splitlines()]
+    assert {e["stage"] for e in events if e["event"] == "stage_started"} == {"translation", "glossary_update", "qa"}
+    assert any(e["event"] == "export_finished" and e["formats"] == ["txt", "epub", "zip"] for e in events)
+    assert "QA 0001 pass" in capsys.readouterr().err
+    result = run_project(project, requester=measured, debug=True)
+    assert len(calls) == 3
+    cached = latest_summary(project)
+    assert cached["run_id"] == result["telemetry"]["run_id"]
+    assert cached["provider_calls"] == 0 and cached["tokens"]["total_tokens"] == 0
+    assert cached["cache_hits"] == 2 and cached["usage_complete"]
+
+
+def test_debug_failure_persists_summary_and_does_not_export(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "1.txt").write_text("第1章 光\n\n" + ("完整文本。" * 40))
+    project = tmp_path / "project"
+    initialize_project(project, source=source)
+    config = json.loads((project / "project.json").read_text())
+    config["revise_attempts"] = 0
+    (project / "project.json").write_text(json.dumps(config))
+    base = fake_model([])
+
+    def failing(payload):
+        response = base(payload)
+        if payload["metadata"]["agent"] == "translation-qa":
+            data = json.loads(response["output"][0]["content"][0]["text"])
+            data["meaning_score"] = 5
+            response["output"][0]["content"][0]["text"] = json.dumps(data)
+        return response
+
+    with pytest.raises(RuntimeError, match="QA blocked"):
+        run_project(project, requester=failing, debug=True)
+    summary = latest_summary(project)
+    assert summary["status"] == "failed" and summary["qa_checks_failed"] == 1
+    assert summary["usage_missing_calls"] == summary["provider_calls"] > 0
+    assert summary["tokens"]["input_tokens"] is None
+    assert not (project / "output/book.zip").exists()
+    assert not (project / "work/run.lock").exists()
+
+
+def test_debug_cli_preserves_json_stdout_and_stats_never_calls_model(tmp_path: Path, capsys, monkeypatch) -> None:
+    from litrelay import project_cli
+    from litrelay.cli import run
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "1.txt").write_text("第1章 光\n\n" + ("完整文本。" * 40))
+    initialize_project(tmp_path / "book", source=source)
+    calls = []
+    real_run = project_cli.run_project
+    monkeypatch.setattr(project_cli, "run_project", lambda *a, **kw: real_run(*a, **kw, requester=fake_model(calls)))
+    log_file = tmp_path / "events.jsonl"
+    assert run(["run", "book", "--workspace", str(tmp_path), "--log-file", str(log_file)]) == 0
+    output = capsys.readouterr()
+    assert json.loads(output.out)["telemetry"]["journal"] == str(log_file)
+    assert "translation started" in output.err
+    count = len(calls)
+    assert run(["stats", "book", "--workspace", str(tmp_path)]) == 0
+    assert json.loads(capsys.readouterr().out)["provider_calls"] == count
+    assert len(calls) == count

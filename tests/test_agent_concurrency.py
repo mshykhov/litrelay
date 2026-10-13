@@ -95,7 +95,7 @@ def test_run_agent_tasks_records_duration_ms(tmp_path: Path) -> None:
     assert isinstance(result["duration_ms"], int) and result["duration_ms"] >= 0
 
 
-def test_run_agent_tasks_task_timeout_marks_hung_failed(tmp_path: Path) -> None:
+def test_run_agent_tasks_task_deadline_preserves_completed_late_response(tmp_path: Path) -> None:
     tasks = tmp_path / "tasks.jsonl"
     out = tmp_path / "out.jsonl"
     lines = [
@@ -119,10 +119,15 @@ def test_run_agent_tasks_task_timeout_marks_hung_failed(tmp_path: Path) -> None:
             release.wait(timeout=5)
         return {"id": cid, "output": [{"content": [{"type": "output_text", "text": cid}]}]}
 
-    summary = run_agent_tasks(tasks, out, model="m", requester=req, concurrency=3, task_timeout=1)
-    release.set()
+    timer = threading.Timer(0.1, release.set)
+    timer.start()
+    try:
+        summary = run_agent_tasks(tasks, out, model="m", requester=req, concurrency=3, task_timeout=0.02)
+    finally:
+        release.set()
+        timer.join()
 
-    assert summary.completed == 2
-    assert summary.failed == 1
+    assert summary.completed == 3
+    assert summary.failed == 0
     statuses = {json.loads(line)["custom_id"]: json.loads(line)["status"] for line in out.read_text().splitlines()}
-    assert statuses["t-1"] == "error"
+    assert statuses["t-1"] == "completed"

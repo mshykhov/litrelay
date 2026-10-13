@@ -27,6 +27,8 @@ uv run litrelay run book
 uv run litrelay run book --max-chapters 5
 uv run litrelay run book --dry-run
 uv run litrelay status book
+uv run litrelay run book --debug
+uv run litrelay stats book
 ```
 
 The default run fills all missing chapters in consecutive batches. A run lock prevents two runners from updating the same project. Dead-process locks can be recovered; an ambiguous lock is reported for inspection. Results and accepted chapter hashes are saved between batches.
@@ -34,6 +36,8 @@ The default run fills all missing chapters in consecutive batches. A run lock pr
 A failed translation or QA stage stops the run with its batch path. No failed batch is accepted. Two automatic revision attempts are enabled by default. Inspect `needs-revision.txt`, QA issues and revision results. Correct the source, seed glossary, settings or prompts and rerun. Changed inputs/settings invalidate generated acceptance; the old audit files remain available.
 
 Each existing translation chapter is trusted input after structure checks, and sampled pairs undergo semantic alignment checks before glossary extraction. It is preserved rather than rewritten by the model.
+
+`--debug` adds live progress, durable stage/task events and a run summary. `--log-file /path/events.jsonl` selects an append-only journal and implies debug. `stats` reads the latest local debug summary, including failures, without model calls. A dry run remains a read-only preflight and creates no telemetry. See [debug reference](debug.md).
 
 ## Export
 

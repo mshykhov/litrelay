@@ -11,6 +11,7 @@ The project runner orchestrates reusable translation/glossary utilities. It read
 | `batch_pipeline`, `revision`, `qa_gate` | translation, complete QA coverage, revision, acceptance |
 | `glossary_*` | evidence extraction, canonical choices, versioning, review |
 | `agent_executor`, `agent_backends` | structured calls, concurrency, retries, process timeout |
+| `telemetry` | optional live progress, safe metadata journal and per-run usage accounting |
 | `integrations/reader*` | optional CMS sync and audio queue |
 
 ## Contracts
@@ -23,6 +24,8 @@ The project runner orchestrates reusable translation/glossary utilities. It read
 - Only a complete accepted book is packaged. Supplied target chapters remain trusted input, with sampled alignment rather than full editorial QA.
 - Seed/canonical glossary versions are preserved; proposed conflicts do not silently rename established entities.
 - Reader POST creates a chapter. Unknown outcomes are reconciled from inventory, and repeated sync verifies existing content. Cached/generating audio requires explicit archival before text replacement. Per-chapter audio jobs use no temporary TTL.
+- Telemetry counts each new request attempt, including rejected outputs and revisions; saved results are cache hits, with no new token spend. Incomplete token/cost totals are null, with known subtotals and coverage kept separately.
+- Provider timeouts bound the actual subprocess/HTTP operation. CLI cancellation kills the process group; concurrent stages wait for active workers before releasing the project lock and closing telemetry. A custom requester must provide its own bounded I/O timeout.
 
 ## Development
 

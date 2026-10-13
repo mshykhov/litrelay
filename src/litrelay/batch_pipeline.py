@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import json
+import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -68,6 +70,7 @@ class BatchConfig:
     prompt_settings: PromptSettings | None = None
     requester: Requester | None = None
     publisher: Publisher | None = None
+    event_handler: Callable[[dict[str, Any]], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -88,18 +91,95 @@ def _resolve_requester(config: BatchConfig, profile: StageProfile) -> Requester 
 
 
 def _run_stage(config: BatchConfig, tasks: Path, results: Path, profile: StageProfile) -> None:
+    name = tasks.name
+    stage = next(
+        (
+            label
+            for prefix, label in [
+                ("alignment", "alignment"),
+                ("revise-qa", "revision_qa"),
+                ("revise", "revision"),
+                ("chain-postgloss", "glossary_update"),
+                ("post-glossary", "glossary_update"),
+                ("glossary-reconcile", "glossary_reconcile"),
+                ("glossary", "glossary_bootstrap"),
+                ("qa", "qa"),
+            ]
+            if name.startswith(prefix)
+        ),
+        "translation",
+    )
+    stage_id = uuid.uuid4().hex[:12]
+
+    def emit(event: dict) -> None:
+        if config.event_handler:
+            config.event_handler({"stage": stage, "stage_id": stage_id, "backend": profile.backend, **event})
+
+    started = time.monotonic()
+    emit(
+        {
+            "event": "stage_started",
+            "model": profile.model,
+            "concurrency": profile.concurrency,
+            "tasks": sum(bool(line.strip()) for line in tasks.read_text().splitlines()),
+            "result_path": str(results),
+        }
+    )
+    try:
+        _execute_stage(config, tasks, results, profile, emit)
+    except BaseException as error:
+        emit(
+            {
+                "event": "stage_failed",
+                "duration_ms": round((time.monotonic() - started) * 1000),
+                "error": True,
+                "error_type": type(error).__name__,
+                "error_code": getattr(error, "code", None),
+            }
+        )
+        raise
+
+
+def _execute_stage(config: BatchConfig, tasks: Path, results: Path, profile: StageProfile, emit: Callable) -> None:
+    started = time.monotonic()
     if config.prompt_settings is not None:
         tasks = prepare_tasks(tasks, config.prompt_settings)
-    real_cli = config.requester is None and profile.backend != "openai"
-    run_agent_tasks(
+    summary = run_agent_tasks(
         tasks,
         results,
         model=profile.model,
         requester=_resolve_requester(config, profile),
         concurrency=profile.concurrency,
         max_retries=profile.max_retries,
-        task_timeout=profile.timeout if real_cli else None,
+        event_handler=emit if config.event_handler else None,
     )
+    emit(
+        {
+            "event": "stage_finished",
+            "duration_ms": round((time.monotonic() - started) * 1000),
+            "completed": summary.completed,
+            "failed": summary.failed,
+            "skipped": summary.skipped,
+        }
+    )
+
+
+def _emit_qa(config: BatchConfig, report, *, stage: str) -> None:
+    if config.event_handler:
+        for decision in report.decisions:
+            config.event_handler(
+                {
+                    "event": "qa_result",
+                    "stage": stage,
+                    "chapter": decision.chapter_id,
+                    "status": decision.verdict,
+                    "failed_metrics": decision.failed_metrics,
+                    "scores": {
+                        metric: getattr(decision, metric)
+                        for metric in ["meaning_score", "terminology_score", "style_score", "omission_score"]
+                    },
+                }
+            )
 
 
 def _guard_qa(config: BatchConfig, translations: Path, qa: Path) -> None:
@@ -175,6 +255,7 @@ def _revise_failed(
             thresholds=config.qa_thresholds,
             expected_chapter_ids={f"{n:04d}" for n in range(config.start, config.end + 1)},
         )
+        _emit_qa(config, report, stage="revision_qa")
         remaining = [d.chapter_id for d in report.decisions if d.verdict != "pass"]
     return remaining
 
@@ -245,6 +326,7 @@ def run_batch(config: BatchConfig) -> BatchReport:
         thresholds=config.qa_thresholds,
         expected_chapter_ids={f"{n:04d}" for n in range(config.start, config.end + 1)},
     )
+    _emit_qa(config, qa_report, stage="qa")
     failed_chapters = [decision.chapter_id for decision in qa_report.decisions if decision.verdict != "pass"]
     if config.revise_attempts > 0 and failed_chapters:
         failed_chapters = _revise_failed(config, subset_dir, results, qa_results, failed_chapters)
