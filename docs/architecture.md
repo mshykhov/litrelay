@@ -23,6 +23,7 @@ The project runner orchestrates reusable translation/glossary utilities. It read
 - Accepted provenance stores the exact full source hash, output hash, configuration fingerprint and QA scores. Cache reuse requires the current inputs and output to match.
 - Only a complete accepted book is packaged. Supplied target chapters remain trusted input, with sampled alignment rather than full editorial QA.
 - Seed/canonical glossary versions are preserved; proposed conflicts do not silently rename established entities.
+- RanobeLib imports normalize soft line wraps and Unicode spacing inside prose text. HTML paragraph/inline tags, attributes and explicit breaks are preserved; ProseMirror `hardBreak` stays explicit. Formatting in pre/code blocks is retained.
 - Reader POST creates a chapter. Unknown outcomes are reconciled from inventory, and repeated sync verifies existing content. Cached/generating audio requires explicit archival before text replacement. Per-chapter audio jobs use no temporary TTL.
 - Telemetry counts each new request attempt, including rejected outputs and revisions; saved results are cache hits, with no new token spend. Incomplete token/cost totals are null, with known subtotals and coverage kept separately.
 - Provider timeouts bound the actual subprocess/HTTP operation. CLI cancellation kills the process group; concurrent stages wait for active workers before releasing the project lock and closing telemetry. A custom requester must provide its own bounded I/O timeout.

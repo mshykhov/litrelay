@@ -49,7 +49,7 @@ def _prosemirror_text(node: Any) -> str:
 
     node_type = node.get("type")
     if node_type == "text":
-        return str(node.get("text", ""))
+        return re.sub(r"\s+", " ", str(node.get("text", "")))
     if node_type == "hardBreak":
         return "\n"
 

@@ -27,6 +27,27 @@ def test_extract_ranobelib_text_from_prosemirror_doc() -> None:
     assert extract_ranobelib_text(payload) == "Глава 1. Мультивселенная\n\nПервый абзац.\nВторая строка."
 
 
+def test_prosemirror_text_wraps_are_spaces_but_explicit_hard_breaks_survive() -> None:
+    payload = {
+        "data": {
+            "content": {
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [
+                            {"type": "text", "text": "На\nпервом\u00a0этаже."},
+                            {"type": "hardBreak"},
+                            {"type": "text", "text": "Другая\r\nстрока."},
+                        ],
+                    },
+                    {"type": "paragraph", "content": [{"type": "text", "text": "Новый абзац."}]},
+                ]
+            }
+        }
+    }
+    assert extract_ranobelib_text(payload) == "На первом этаже.\nДругая строка.\n\nНовый абзац."
+
+
 def test_extract_qidian_page_text_from_paragraph_dump() -> None:
     payload = {
         "title": "第一章 多元宇宙 42",

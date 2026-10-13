@@ -51,6 +51,16 @@ def test_render_existing_html_preserves_text_and_removes_service_attributes() ->
     assert content == "<p>Первый.</p><p>Второй.</p>"
 
 
+def test_render_html_collapses_soft_wraps_without_changing_blocks_or_attributes() -> None:
+    payload = {
+        "data": {
+            "content": '<p title="x > y">На\nпервом\r\nэтаже <em>магазина\nНина</em> сидела.</p><p>Она\u00a0\u202fждала.</p>'
+        }
+    }
+    result = render_ranobelib_content(payload, chapter_number=186, reader_title="Глава 186")
+    assert result == '<p title="x > y">На первом этаже <em>магазина Нина</em> сидела.</p><p>Она ждала.</p>'
+
+
 def test_render_preserves_numbered_first_paragraph_when_title_differs() -> None:
     payload = {
         "data": {

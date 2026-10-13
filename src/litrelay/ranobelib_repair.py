@@ -4,6 +4,7 @@ from typing import Any
 
 from litrelay.publisher import chapter_html
 from litrelay.text_extraction import extract_ranobelib_text
+from litrelay.text_normalization import normalize_html_whitespace
 
 RAW_OBJECT_MARKERS = ("{'type': 'doc'", '"type": "doc"', '"type":"doc"')
 SERVICE_ATTRIBUTE_RE = re.compile(
@@ -53,7 +54,7 @@ def render_ranobelib_content(
             paragraphs.pop(0)
         rendered = chapter_html("\n\n".join(paragraphs))
     elif isinstance(content, str):
-        rendered = SERVICE_ATTRIBUTE_RE.sub("", content).strip()
+        rendered = normalize_html_whitespace(SERVICE_ATTRIBUTE_RE.sub("", content)).strip()
     else:
         raise ValueError("RanobeLib data.content must be HTML or ProseMirror JSON")
 
