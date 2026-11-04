@@ -7,7 +7,7 @@ import json
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -66,7 +66,6 @@ class BatchConfig:
     revise_attempts: int = 0
     chain: bool = False
     incremental_glossary: bool = True
-    preflight_glossary: bool = False
     qa_thresholds: dict[str, float] | None = None
     protected_csv: Path | None = None
     style_guide: Path | None = None
@@ -317,10 +316,6 @@ def run_batch(config: BatchConfig) -> BatchReport:
         raise ValueError("Invalid chapter range")
     bd = config.batch_dir
     bd.mkdir(parents=True, exist_ok=True)
-    if config.preflight_glossary:
-        from litrelay.preflight_glossary import prepare_preflight_glossary
-
-        config = replace(config, glossary_csv=prepare_preflight_glossary(config))
 
     subset_dir = bd / "glossary-subsets"
     write_glossary_subsets(

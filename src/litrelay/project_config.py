@@ -116,8 +116,6 @@ def read_config(project: Path) -> dict:
     source_count = config.get("bootstrap_source_chapters", 3)
     if type(source_count) is not int or source_count < 1:
         raise ValueError("bootstrap_source_chapters must be a positive integer")
-    if not isinstance(config.get("preflight_glossary", False), bool):
-        raise ValueError("preflight_glossary must be a boolean")
     for name in ["batch_size", "context_window", "min_chars", "glossary_samples"]:
         if not isinstance(config[name], int) or config[name] < 1:
             raise ValueError(f"{name} must be positive")

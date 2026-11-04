@@ -119,7 +119,6 @@ def _batch_config(
         context_window=config["context_window"],
         revise_attempts=config["revise_attempts"],
         chain=config["chain"],
-        preflight_glossary=config.get("preflight_glossary", False),
         qa_thresholds=config["qa_thresholds"],
         prompt_settings=PromptSettings(
             config["source_language"], config["target_language"], config["style"], config["prompts"]
