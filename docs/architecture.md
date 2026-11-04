@@ -7,6 +7,7 @@ The project runner orchestrates reusable translation/glossary utilities. It read
 | `project_cli`, `project_config` | small public workflow and saved settings |
 | `project_workflow`, `project_storage` | bootstrap, missing chapters, hashes, lock, resume |
 | `project_revision` | chapter-local feedback, backed-up revision attempts, QA and replacement |
+| `source_bootstrap` | source-only initial glossary proposal and review before fresh translation |
 | `book_inputs`, `book_export` | text/EPUB input and TXT/EPUB/ZIP output |
 | `prompt_profiles` | language/style/template adaptation across all LLM stages |
 | `batch_pipeline`, `revision`, `qa_gate` | translation, complete QA coverage, revision, acceptance |

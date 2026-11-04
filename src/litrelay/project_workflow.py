@@ -17,6 +17,7 @@ from litrelay.project_config import normalize_glossary, read_config
 from litrelay.project_storage import digest, project_lock, write_json
 from litrelay.prompt_profiles import PromptSettings
 from litrelay.prompts import build_glossary_prompt
+from litrelay.source_bootstrap import bootstrap_source_glossary
 from litrelay.telemetry import RunTrace
 
 Requester = Callable[[dict], dict]
@@ -159,8 +160,11 @@ def _bootstrap(
     numbers = sorted(existing)
     count = min(config["glossary_samples"], len(numbers))
     chosen = [numbers[round(i * (len(numbers) - 1) / max(1, count - 1))] for i in range(count)]
+    source_samples = []
     if trace:
         trace.emit({"event": "bootstrap_started", "samples": len(chosen)})
+    if not existing and not seed.exists():
+        source_samples = bootstrap_source_glossary(cfg, source, config.get("bootstrap_source_chapters", 3))
     if chosen:
         tasks = batch / "alignment.tasks.jsonl"
         results = batch / "alignment.results.jsonl"
@@ -210,7 +214,15 @@ def _bootstrap(
             )
     if not validate_glossary(glossary).ok:
         raise RuntimeError(f"Invalid glossary: {glossary}")
-    write_json(ready, {"fingerprint": fp, "glossary_sha256": digest(glossary.read_text()), "aligned_samples": chosen})
+    write_json(
+        ready,
+        {
+            "fingerprint": fp,
+            "glossary_sha256": digest(glossary.read_text()),
+            "aligned_samples": chosen,
+            "source_samples": source_samples,
+        },
+    )
     return glossary
 
 

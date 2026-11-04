@@ -189,16 +189,21 @@ def test_debug_tracks_real_stages_and_cache_resume_without_recounting_usage(tmp_
 
     result = run_project(project, requester=measured, debug=True)
     trace = result["telemetry"]
-    assert trace["provider_calls"] == len(calls) == 3
-    assert trace["usage_complete"] and trace["tokens"]["total_tokens"] == 360
+    assert trace["provider_calls"] == len(calls) == 5
+    assert trace["usage_complete"] and trace["tokens"]["total_tokens"] == 600
     assert trace["qa_checks_passed"] == 1
     assert trace["stages"]["qa"]["tokens"]["input_tokens"] == 100
     events = [json.loads(line) for line in Path(trace["journal"]).read_text().splitlines()]
-    assert {e["stage"] for e in events if e["event"] == "stage_started"} == {"translation", "glossary_update", "qa"}
+    assert {e["stage"] for e in events if e["event"] == "stage_started"} == {
+        "translation",
+        "glossary_update",
+        "qa",
+        "glossary_bootstrap",
+    }
     assert any(e["event"] == "export_finished" and e["formats"] == ["txt", "epub", "zip"] for e in events)
     assert "QA 0001 pass" in capsys.readouterr().err
     result = run_project(project, requester=measured, debug=True)
-    assert len(calls) == 3
+    assert len(calls) == 5
     cached = latest_summary(project)
     assert cached["run_id"] == result["telemetry"]["run_id"]
     assert cached["provider_calls"] == 0 and cached["tokens"]["total_tokens"] == 0
@@ -301,8 +306,11 @@ def test_revision_changes_only_selected_chapter_and_survives_resume(tmp_path: Pa
     assert all(p.read_bytes() == original for p, original in unchanged.items())
     assert len(calls) == 3
     assert all(user["chapter_id"] == f"{chapter:04d}" for _, user in calls)
-    assert all(user["reader_feedback"] == "Сделай действия понятнее"
-               for agent, user in calls if agent in {"translation-agent", "translation-qa"})
+    assert all(
+        user["reader_feedback"] == "Сделай действия понятнее"
+        for agent, user in calls
+        if agent in {"translation-agent", "translation-qa"}
+    )
     assert calls[0][1]["previous_translation"] == previous
     assert "Повествование стало яснее" in (project / "output/book.txt").read_text()
     progress = (project / "work/progress.json").read_bytes()

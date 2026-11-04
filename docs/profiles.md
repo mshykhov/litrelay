@@ -12,7 +12,9 @@ Use BCP 47 language codes such as `zh`, `ru`, `en`, `uk`, `ja`, `de`, `fr` or `p
 
 With a partial translation, the runner samples up to 12 pairs across the available chapters and checks semantic alignment. It extracts stable names and terms evidenced by those translations. A supplied seed glossary overrides automatic extraction. Canonical target choices survive later glossary merges; conflicting candidates are recorded for review.
 
-Without a translation, the glossary starts empty (or from your seed). The default sequential mode discovers new terms after each chapter and injects them into the next chapter's glossary. Previously translated target chapters also supply style/context.
+Without a translation or seed, LitRelay prepares a source-based glossary before translating. The translation model proposes concise names from the first three source chapters, then the support model reviews and corrects the proposal against those same chapters. Reviewed entries with confidence at least 0.90 form the initial glossary; uncertain entries are saved for review. `bootstrap_source_chapters` in project.json controls the initial window. A supplied seed bypasses source bootstrap. Existing translations still use aligned chapter pairs.
+
+The default sequential mode discovers new terms after each chapter and injects them into the next chapter's glossary. QA sees draft candidates before acceptance; revisions refresh those candidates. Previously translated target chapters also supply style/context.
 
 ```bash
 uv run litrelay init book --source original --translation translated --glossary glossary.csv --style-file style.txt --prompts-dir examples/prompts

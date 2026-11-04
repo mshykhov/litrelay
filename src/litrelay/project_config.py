@@ -97,6 +97,7 @@ def initialize_project(
         "chain": True,
         "revise_attempts": 2,
         "glossary_samples": 12,
+        "bootstrap_source_chapters": 3,
         "min_chars": min_chars,
         "qa_thresholds": {"meaning_score": 90, "terminology_score": 85, "style_score": 75, "omission_score": 95},
     }
@@ -112,6 +113,9 @@ def read_config(project: Path) -> dict:
     config = json.loads((project / "project.json").read_text(encoding="utf-8"))
     if config.get("version") != 1:
         raise ValueError("Unsupported project config version")
+    source_count = config.get("bootstrap_source_chapters", 3)
+    if type(source_count) is not int or source_count < 1:
+        raise ValueError("bootstrap_source_chapters must be a positive integer")
     for name in ["batch_size", "context_window", "min_chars", "glossary_samples"]:
         if not isinstance(config[name], int) or config[name] < 1:
             raise ValueError(f"{name} must be positive")

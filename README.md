@@ -37,7 +37,7 @@ To improve one accepted chapter, use `uv run litrelay revise my-book --chapter 7
 ## Profiles and terminology
 
 - **continuation**: selected automatically with an existing translation. Sample aligned pairs, extract established terms and use preceding target chapters as context.
-- **fresh**: selected without a translation. Choose terminology from the source and carry new terms into subsequent chapters.
+- **fresh**: selected without a translation. Prepare and review initial terminology from the first three source chapters before translation, then carry new terms into subsequent chapters.
 - **literary**: expressive, natural prose while preserving facts and the author's voice.
 
 Languages, style, backend/model, stage concurrency and quality thresholds are saved in `projects/my-book/project.json`. Supply a seed glossary, a style file or your own prompts at initialization. [Profiles and customization](docs/profiles.md).

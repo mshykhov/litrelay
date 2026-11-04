@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -492,7 +493,8 @@ def _parse_confidence(value: str | None) -> float:
     if normalized == "low":
         return 0.3
     try:
-        return float(normalized)
+        parsed = float(normalized)
+        return parsed if math.isfinite(parsed) and 0 <= parsed <= 1 else 0.0
     except ValueError:
         return 0.0
 
