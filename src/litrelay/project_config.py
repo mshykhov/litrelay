@@ -29,6 +29,8 @@ def initialize_project(
     model: str = "gpt-5.5",
     style: str = "",
     prompts_dir: Path | None = None,
+    reasoning_effort: str | None = None,
+    support_reasoning_effort: str | None = None,
 ) -> dict:
     if project.exists() and any(project.iterdir()):
         raise ValueError("Project already exists; use run to resume")
@@ -37,6 +39,9 @@ def initialize_project(
             raise ValueError("Languages must be BCP47 codes such as zh, ru, en, uk or pt-BR")
     if backend not in {"codex", "claude", "openai"} or not model.strip():
         raise ValueError("Select codex, claude or openai and a model")
+    for effort in (reasoning_effort, support_reasoning_effort):
+        if effort not in {None, "low", "medium", "high", "xhigh", "max"}:
+            raise ValueError("Invalid reasoning effort")
     if min_chars < 1:
         raise ValueError("min_chars must be positive")
     chapters = read_chapters(source, min_chars=min_chars)
@@ -95,6 +100,10 @@ def initialize_project(
         "min_chars": min_chars,
         "qa_thresholds": {"meaning_score": 90, "terminology_score": 85, "style_score": 75, "omission_score": 95},
     }
+    if reasoning_effort is not None:
+        config["translation"]["reasoning_effort"] = reasoning_effort
+    if support_reasoning_effort is not None:
+        config["support"]["reasoning_effort"] = support_reasoning_effort
     write_json(project / "project.json", config)
     return config
 
@@ -123,6 +132,8 @@ def read_config(project: Path) -> dict:
         raise ValueError("QA thresholds need four finite scores between 0 and 100")
     for name in ["translation", "support"]:
         profile = config[name]
+        if profile.get("reasoning_effort") not in {None, "low", "medium", "high", "xhigh", "max"}:
+            raise ValueError(f"Invalid {name} reasoning_effort")
         if profile["backend"] not in {"codex", "claude", "openai"} or not profile["model"]:
             raise ValueError(f"Invalid {name} backend/model")
         if not 1 <= profile["concurrency"] <= 32:

@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 from litrelay.project_config import initialize_project
+from litrelay.project_revision import revise_project_chapter
 from litrelay.project_scaffold import _validate_slug
 from litrelay.project_workflow import export_project, project_status, run_project
 from litrelay.prompt_profiles import STYLES
 from litrelay.telemetry import latest_summary
 
-COMMANDS = {"init", "run", "status", "export", "profiles", "reader", "stats"}
+REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
+COMMANDS = {"init", "run", "revise", "status", "export", "profiles", "reader", "stats"}
 
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
@@ -28,12 +31,15 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     init.add_argument("--prompts-dir", type=Path)
     init.add_argument("--backend", choices=["codex", "claude", "openai"], default="codex")
     init.add_argument("--model", default="gpt-5.5")
+    init.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
+    init.add_argument("--support-reasoning-effort", choices=REASONING_EFFORTS)
     init.add_argument("--min-chars", type=int, default=100)
-    for command in ["run", "status", "export", "stats"]:
+    for command in ["run", "revise", "status", "export", "stats"]:
         parser = subparsers.add_parser(
             command,
             help={
                 "run": "Translate missing chapters, verify and export the complete book",
+                "revise": "Revise one accepted chapter using reader feedback, or translate it again from scratch",
                 "status": "Show local progress without calling a model",
                 "export": "Package verified chapters as TXT, EPUB and ZIP",
                 "stats": "Read the latest debug run summary without calling a model",
@@ -44,6 +50,16 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         if command == "run":
             parser.add_argument("--max-chapters", type=int)
             parser.add_argument("--dry-run", action="store_true")
+        if command == "revise":
+            chapters = parser.add_mutually_exclusive_group(required=True)
+            chapters.add_argument("--chapter", type=int)
+            chapters.add_argument("--chapters", help="Inclusive chapter range, e.g. 7-10")
+            parser.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
+            feedback = parser.add_mutually_exclusive_group()
+            feedback.add_argument("--feedback", help="Chapter-specific instructions")
+            feedback.add_argument("--feedback-file", type=Path, help="Read UTF-8 instructions from a file")
+            parser.add_argument("--from-scratch", action="store_true", help="Do not send the previous translation")
+        if command in {"run", "revise"}:
             parser.add_argument("--debug", action="store_true", help="Live stage progress and durable run telemetry")
             parser.add_argument(
                 "--log-file", type=Path, help="Append debug events to this JSONL file (implies --debug)"
@@ -108,6 +124,8 @@ def execute(args: argparse.Namespace) -> int:
                 model=args.model,
                 style=args.style_file.read_text(encoding="utf-8") if args.style_file else "",
                 prompts_dir=args.prompts_dir,
+                reasoning_effort=args.reasoning_effort,
+                support_reasoning_effort=args.support_reasoning_effort,
             )
             print(
                 f"Project: {project}\nProfile: {config['profile']}; {config['source_language']} -> {config['target_language']}\nRun: litrelay run {args.name} --workspace {args.workspace}"
@@ -119,6 +137,44 @@ def execute(args: argparse.Namespace) -> int:
             result = export_project(project)
         elif args.command == "stats":
             result = latest_summary(project)
+        elif args.command == "revise":
+            if args.chapters:
+                match = re.fullmatch(r"([0-9]+)-([0-9]+)", args.chapters)
+                if not match or int(match[1]) < 1 or int(match[1]) > int(match[2]):
+                    raise ValueError("--chapters requires a positive ascending range, e.g. 7-10")
+                first, last = int(match[1]), int(match[2])
+            else:
+                first = last = args.chapter
+            feedback = args.feedback_file.read_text(encoding="utf-8") if args.feedback_file else args.feedback or ""
+            revisions = []
+            for chapter in range(first, last + 1):
+                try:
+                    result = revise_project_chapter(
+                        project,
+                        chapter=chapter,
+                        feedback=feedback,
+                        from_scratch=args.from_scratch,
+                        debug=args.debug,
+                        log_file=args.log_file,
+                        reasoning_effort=args.reasoning_effort,
+                    )
+                except (ValueError, RuntimeError, OSError) as error:
+                    if args.chapters:
+                        done = [item["revised_chapter"] for item in revisions]
+                        raise RuntimeError(
+                            f"Chapter {chapter} failed: {error}. Successfully revised chapters: {done}; results kept"
+                        ) from error
+                    raise
+                revisions.append(result)
+            if args.chapters:
+                result = {
+                    **result,
+                    "revised_chapters": [item["revised_chapter"] for item in revisions],
+                    "revisions": [
+                        {k: item[k] for k in ("revised_chapter", "revision_dir", "previous_version")}
+                        for item in revisions
+                    ],
+                }
         else:
             result = run_project(project, max_chapters=args.max_chapters, debug=args.debug, log_file=args.log_file)
         summary = {k: v for k, v in result.items() if k not in {"chapters", "fingerprint"}}

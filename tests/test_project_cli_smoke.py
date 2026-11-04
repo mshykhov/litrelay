@@ -63,3 +63,11 @@ print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':
     assert (project / "work/progress.json").read_bytes() == before
     report = json.loads((project / "output/report.json").read_text())
     assert report["total"] == 2 and report["generated"] == 1
+    old = (project / "work/accepted/0001.txt").read_text()
+    revised = json.loads(cli("revise", "demo", "--chapter", "1", "--feedback", "Make the dialogue more natural"))
+    assert revised["revised_chapter"] == 1 and revised["complete"]
+    assert (tmp_path / revised["previous_version"]).read_text() == old
+    revised_progress = (project / "work/progress.json").read_bytes()
+    assert '"complete": true' in cli("run", "demo")
+    assert (project / "work/progress.json").read_bytes() == revised_progress
+    assert json.loads(cli("revise", "demo", "--chapter", "2", "--from-scratch"))["revised_chapter"] == 2

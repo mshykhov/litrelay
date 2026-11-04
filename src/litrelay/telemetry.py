@@ -34,6 +34,7 @@ ALLOWED_FIELDS = {
     "chapter",
     "backend",
     "model",
+    "reasoning_effort",
     "agent",
     "status",
     "valid_output",

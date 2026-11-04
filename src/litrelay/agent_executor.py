@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
 import urllib.error
 import urllib.request
+import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
@@ -152,7 +154,6 @@ def run_agent_tasks(
     task_timeout: float | None = None,
     event_handler: Callable[[dict[str, Any]], None] | None = None,
 ) -> AgentRunSummary:
-    existing_ids = _read_completed_ids(output_jsonl) if resume else set()
     output_jsonl.parent.mkdir(parents=True, exist_ok=True)
 
     if requester is None:
@@ -163,21 +164,29 @@ def run_agent_tasks(
         def requester(payload: dict[str, Any]) -> dict[str, Any]:
             return call_openai_responses(payload, api_key=resolved_api_key)
 
+    tasks = [json.loads(line) for line in input_jsonl.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if len({task["custom_id"] for task in tasks}) != len(tasks):
+        raise ValueError("Duplicate task custom_id")
+    hashes = {
+        task["custom_id"]: _request_hash(
+            build_responses_payload(
+                task, model=model, max_output_tokens=max_output_tokens, reasoning_effort=reasoning_effort
+            )
+        )
+        for task in tasks
+    }
+    existing = _prepare_results(output_jsonl, tasks, hashes, resume=resume)
     pending: list[dict[str, Any]] = []
     skipped = 0
-    with input_jsonl.open(encoding="utf-8") as input_file:
-        for line in input_file:
-            if not line.strip():
-                continue
-            if limit is not None and len(pending) >= limit:
-                break
-            task = json.loads(line)
-            if task["custom_id"] in existing_ids:
-                skipped += 1
-                if event_handler:
-                    event_handler({"event": "cache_hit", "task_id": task["custom_id"], "agent": task["agent"]})
-                continue
-            pending.append(task)
+    for task in tasks:
+        if limit is not None and len(pending) >= limit:
+            break
+        if task["custom_id"] in existing:
+            skipped += 1
+            if event_handler:
+                event_handler({"event": "cache_hit", "task_id": task["custom_id"], "agent": task["agent"]})
+            continue
+        pending.append(task)
 
     def run_one(task: dict[str, Any]) -> dict[str, Any]:
         payload = build_responses_payload(
@@ -232,11 +241,11 @@ def run_agent_tasks(
 
     completed = 0
     failed = 0
-    mode = "a" if resume else "w"
-    with output_jsonl.open(mode, encoding="utf-8") as output_file:
+    with output_jsonl.open("a", encoding="utf-8") as output_file:
 
         def record(result: dict[str, Any]) -> None:
             nonlocal completed, failed
+            result["request_sha256"] = hashes[result["custom_id"]]
             if task_timeout is not None and result.get("total_duration_ms", 0) > task_timeout * 1000:
                 if not result.get("deadline_exceeded") and event_handler:
                     event_handler(
@@ -419,16 +428,40 @@ def _format_for_task(task: dict[str, Any]) -> dict[str, Any]:
     return {"type": "text"}
 
 
-def _read_completed_ids(output_jsonl: Path) -> set[str]:
+def _request_hash(payload: dict[str, Any]) -> str:
+    data = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+
+def _prepare_results(
+    output_jsonl: Path, tasks: list[dict[str, Any]], hashes: dict[str, str], *, resume: bool
+) -> set[str]:
     if not output_jsonl.exists():
         return set()
-
-    ids = set()
-    with output_jsonl.open(encoding="utf-8") as result_file:
-        for line in result_file:
+    original = output_jsonl.read_text(encoding="utf-8")
+    by_id = {task["custom_id"]: task for task in tasks}
+    selected: dict[str, dict[str, Any]] = {}
+    if resume:
+        for line in original.splitlines():
             if not line.strip():
                 continue
             result = json.loads(line)
-            if result.get("status") == "completed":
-                ids.add(result["custom_id"])
-    return ids
+            cid = result.get("custom_id")
+            if (
+                cid in by_id
+                and result.get("status") == "completed"
+                and result.get("request_sha256") == hashes[cid]
+                and _is_valid_output(by_id[cid], result.get("output", ""))
+            ):
+                selected[cid] = result
+    replacement = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in selected.values())
+    if replacement != original:
+        archive = output_jsonl.with_name(f"{output_jsonl.name}.archive-{uuid.uuid4().hex}")
+        archive.write_text(original, encoding="utf-8")
+        temporary = output_jsonl.with_name(f".{output_jsonl.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_text(replacement, encoding="utf-8")
+            temporary.replace(output_jsonl)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return set(selected)

@@ -22,6 +22,15 @@ from litrelay.telemetry import RunTrace
 Requester = Callable[[dict], dict]
 
 
+def _require_backends(config: dict) -> None:
+    for name in ["translation", "support"]:
+        backend = config[name]["backend"]
+        if backend == "openai" and not os.environ.get("OPENAI_API_KEY"):
+            raise RuntimeError("Set OPENAI_API_KEY for the openai backend")
+        if backend != "openai" and shutil.which(backend) is None:
+            raise RuntimeError(f"Install and sign in to {backend}, or choose another backend in project.json")
+
+
 def _inputs(project: Path) -> tuple[dict, dict[int, str], dict[int, str], str]:
     config = read_config(project)
     source = read_chapters(project / "input/source", min_chars=config["min_chars"])
@@ -93,7 +102,7 @@ def _batch_config(
 ) -> BatchConfig:
     def profile(name: str) -> StageProfile:
         p = config[name]
-        return StageProfile(p["backend"], p["model"], p["concurrency"])
+        return StageProfile(p["backend"], p["model"], p["concurrency"], reasoning_effort=p.get("reasoning_effort"))
 
     return BatchConfig(
         slug=project.name,
@@ -253,12 +262,7 @@ def _run_project(
             if status["accepted"]:
                 trace.emit({"event": "cache_hit", "stage": "accepted_chapters", "count": status["accepted"]})
         if requester is None and (status["missing"] or not status["bootstrap_ready"]):
-            for name in ["translation", "support"]:
-                backend = config[name]["backend"]
-                if backend == "openai" and not os.environ.get("OPENAI_API_KEY"):
-                    raise RuntimeError("Set OPENAI_API_KEY for the openai backend")
-                if backend != "openai" and shutil.which(backend) is None:
-                    raise RuntimeError(f"Install and sign in to {backend}, or choose another backend in project.json")
+            _require_backends(config)
         progress_path = project / "work/progress.json"
         previous = json.loads(progress_path.read_text()) if progress_path.exists() else {}
         state = {
@@ -269,6 +273,8 @@ def _run_project(
         accepted = project / "work/accepted"
         accepted.mkdir(parents=True, exist_ok=True)
         for n, text in existing.items():
+            if str(n) in state["chapters"]:
+                continue
             validate_chapter(n, text, min_chars=config["min_chars"], target_language=config["target_language"])
             (accepted / f"{n:04d}.txt").write_text(text, encoding="utf-8")
             state["chapters"][str(n)] = {

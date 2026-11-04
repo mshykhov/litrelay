@@ -39,6 +39,25 @@ Each existing translation chapter is trusted input after structure checks, and s
 
 `--debug` adds live progress, durable stage/task events and a run summary. `--log-file /path/events.jsonl` selects an append-only journal and implies debug. `stats` reads the latest local debug summary, including failures, without model calls. A dry run remains a read-only preflight and creates no telemetry. See [debug reference](debug.md).
 
+## Revise chapters
+
+Use reader feedback to revise an accepted chapter without changing the book's settings or retranslating other chapters:
+
+```bash
+uv run litrelay revise book --chapter 7 --feedback "Make the dialogue more natural; clarify who acts."
+uv run litrelay revise book --chapter 7 --feedback-file feedback.txt
+uv run litrelay revise book --chapter 7 --from-scratch
+uv run litrelay revise book --chapters 7-10 --from-scratch --reasoning-effort high
+```
+
+A range is inclusive and runs sequentially. If a chapter fails, processing stops and earlier successful revisions remain accepted. Each chapter gets its own backup and QA.
+
+The default sends the original, previous translation, preceding target context, canonical glossary and feedback. `--from-scratch` omits the previous translation; optional feedback still applies. Feedback goes to translation, QA and automatic repair attempts. It is local to that chapter, not a persistent book-wide instruction or glossary override. For a book-wide change, edit the project style or seed glossary instead.
+
+The chapter must already be accepted under the current inputs/settings. Every request makes a new attempt. The previous text, checkpoint, request, candidate and QA evidence are saved under `work/revisions/<chapter>/<attempt>/`. Failed QA or provider errors keep the accepted text and exports. Successful revisions replace only the selected chapter and refresh TXT/EPUB/ZIP when the book is complete. `run` preserves the revision, including revisions of supplied translations, and uses it as context for future chapters. Already accepted later chapters remain unchanged.
+
+`--workspace`, `--debug` and `--log-file` work as for `run`. Revisions use the project's backends, models, quality thresholds and repair-attempt limit. They preserve the active glossary. `--reasoning-effort` temporarily overrides translation and repair effort for this command; support stages keep their project setting. It does not modify the project configuration or invalidate other chapters. If packaging fails after chapter acceptance, rebuild it with `litrelay export book`. External Reader delivery remains a separate explicit operation.
+
 ## Export
 
 The runner exports only after every source chapter has an accepted target chapter. You can rebuild exports with:

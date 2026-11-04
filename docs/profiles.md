@@ -26,8 +26,12 @@ Edit `projects/book/project.json` before a run. `translation` and `support` each
 
 Other settings: `batch_size`, `context_window`, `glossary_samples`, `revise_attempts`, `min_chars`, `qa_thresholds`. Model identifiers belong to your provider/account; LitRelay does not assume every model is available everywhere.
 
+Set `reasoning_effort` separately inside `translation` and `support` to `low`, `medium`, `high`, `xhigh` or `max`, subject to model support. Codex CLI and OpenAI requests receive the configured effort; Claude uses its own defaults. Omit the setting to preserve the existing backend defaults (Codex: `low`). Debug stage events record the configured effort. Set these at creation with `init --reasoning-effort high --support-reasoning-effort low`. For a one-off chapter revision, `revise --reasoning-effort high` overrides only translation and repair stages without changing project settings.
+
 ## Custom prompts
 
 At initialization, `--prompts-dir` copies any of `translation.md`, `qa.md`, `glossary.md`, `alignment.md` into the project configuration. Each replaces that stage's system prompt. `{source_language}` and `{target_language}` placeholders are expanded. Style and languages are appended to every stage; the task payload supplies the source, glossary and relevant context.
 
 The structured output contract and deterministic checks remain in force. This allows different narration styles and languages without removing validation. Edit `style` and `prompts` in the saved config to refine them; changed settings invalidate old generated acceptance.
+
+For chapter-specific feedback without changing the project configuration, use `litrelay revise book --chapter 7 --feedback "Clarify the dialogue"`. See [chapter revision](usage.md#revise-chapters). This feedback reaches translation, QA and repair attempts while the saved style and canonical glossary remain unchanged.

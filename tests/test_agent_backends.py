@@ -6,6 +6,19 @@ from litrelay.agent_backends import build_cli_requester
 from litrelay.agent_executor import extract_response_text
 
 
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_codex_requester_passes_configured_reasoning_effort(effort: str) -> None:
+    captured = []
+
+    def runner(argv, prompt):
+        captured.extend(argv)
+        return '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}'
+
+    requester = build_cli_requester("codex", model="gpt-6.1-terra", reasoning_effort=effort, runner=runner)
+    requester({"input": [], "text": {"format": {}}})
+    assert f"model_reasoning_effort={effort}" in captured
+
+
 def test_cli_requester_builds_prompt_and_extracts_fenced_json() -> None:
     captured: dict = {}
 

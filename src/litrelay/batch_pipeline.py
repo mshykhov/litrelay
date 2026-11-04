@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import io
 import json
 import time
 import uuid
@@ -11,6 +13,7 @@ from typing import Any
 
 from litrelay.agent_backends import make_requester
 from litrelay.agent_executor import run_agent_tasks
+from litrelay.agent_results import validate_agent_results
 from litrelay.glossary_feedback import write_glossary_candidates
 from litrelay.glossary_reconcile import (
     build_reconcile_batch_task,
@@ -39,6 +42,7 @@ class StageProfile:
     concurrency: int = 1
     max_retries: int = 2
     timeout: int = 900
+    reasoning_effort: str | None = None
 
 
 _DEFAULT_TRANSLATION_PROFILE = StageProfile(backend="codex", model="gpt-5.5", concurrency=1)
@@ -87,7 +91,7 @@ class BatchReport:
 def _resolve_requester(config: BatchConfig, profile: StageProfile) -> Requester | None:
     if config.requester is not None:
         return config.requester
-    return make_requester(profile.backend, profile.model, profile.timeout)
+    return make_requester(profile.backend, profile.model, profile.timeout, reasoning_effort=profile.reasoning_effort)
 
 
 def _run_stage(config: BatchConfig, tasks: Path, results: Path, profile: StageProfile) -> None:
@@ -120,6 +124,7 @@ def _run_stage(config: BatchConfig, tasks: Path, results: Path, profile: StagePr
         {
             "event": "stage_started",
             "model": profile.model,
+            "reasoning_effort": profile.reasoning_effort,
             "concurrency": profile.concurrency,
             "tasks": sum(bool(line.strip()) for line in tasks.read_text().splitlines()),
             "result_path": str(results),
@@ -151,6 +156,7 @@ def _execute_stage(config: BatchConfig, tasks: Path, results: Path, profile: Sta
         requester=_resolve_requester(config, profile),
         concurrency=profile.concurrency,
         max_retries=profile.max_retries,
+        reasoning_effort=profile.reasoning_effort,
         event_handler=emit if config.event_handler else None,
     )
     emit(
@@ -241,6 +247,7 @@ def _revise_failed(
             out_jsonl=rev_qa_tasks,
             glossary_subset_dir=subset_dir,
         )
+        _prepare_glossary_review(config, rev_results, rev_qa_tasks)
         _run_stage(config, rev_qa_tasks, rev_qa_results, config.support_profile)
         _guard_qa(config, rev_results, rev_qa_results)
         apply_revisions(
@@ -258,6 +265,50 @@ def _revise_failed(
         _emit_qa(config, report, stage="revision_qa")
         remaining = [d.chapter_id for d in report.decisions if d.verdict != "pass"]
     return remaining
+
+
+def _prepare_glossary_review(
+    config: BatchConfig, translations: Path, qa_tasks: Path, *, precomputed: Path | None = None
+) -> Path:
+    outputs = [
+        json.loads(json.loads(line)["output"])
+        for line in translations.read_text().splitlines()
+        if json.loads(line).get("status") == "completed"
+    ]
+    signature = hashlib.sha256(
+        json.dumps([(o["chapter_id"], o["translation"]) for o in outputs], ensure_ascii=False).encode()
+    ).hexdigest()[:16]
+    tasks = config.batch_dir / f"post-glossary-review-{signature}.tasks.jsonl"
+    results = config.batch_dir / f"post-glossary-review-{signature}.results.jsonl"
+    write_post_translation_glossary_tasks(
+        source_dir=config.source_dir,
+        translation_results_jsonl=translations,
+        glossary_csv=config.glossary_csv,
+        out_jsonl=tasks,
+    )
+    if precomputed is not None:
+        results = precomputed
+    else:
+        _run_stage(config, tasks, results, config.support_profile)
+    if not validate_agent_results(tasks, results, kind="glossary").ok:
+        raise RuntimeError(f"Provisional glossary extraction failed; inspect {results}")
+    by_chapter: dict[str, list[dict[str, str]]] = {}
+    for line in results.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        result = json.loads(line)
+        chapter = result["custom_id"].split("-")[-1]
+        rows = csv.DictReader(io.StringIO(result["output"]))
+        by_chapter[chapter] = [
+            {**{key: (value or "").strip() for key, value in row.items()}, "chapter_id": chapter}
+            for row in rows
+            if (row.get("source") or "").strip() and (row.get("target_ru") or "").strip()
+        ]
+    qas = [json.loads(line) for line in qa_tasks.read_text().splitlines() if line.strip()]
+    for task in qas:
+        task["input"]["provisional_glossary_candidates"] = by_chapter.get(task["input"]["chapter_id"], [])
+    _write_jsonl(qas, qa_tasks)
+    return results
 
 
 def run_batch(config: BatchConfig) -> BatchReport:
@@ -319,6 +370,12 @@ def run_batch(config: BatchConfig) -> BatchReport:
         out_jsonl=qa_tasks,
         glossary_subset_dir=subset_dir,
     )
+    _prepare_glossary_review(
+        config,
+        results,
+        qa_tasks,
+        precomputed=bd / "post-glossary.results.jsonl" if config.chain and config.incremental_glossary else None,
+    )
     _run_stage(config, qa_tasks, qa_results, config.support_profile)
     _guard_qa(config, results, qa_results)
     qa_report = evaluate_qa_results(
@@ -328,8 +385,11 @@ def run_batch(config: BatchConfig) -> BatchReport:
     )
     _emit_qa(config, qa_report, stage="qa")
     failed_chapters = [decision.chapter_id for decision in qa_report.decisions if decision.verdict != "pass"]
+    translation_changed = False
     if config.revise_attempts > 0 and failed_chapters:
+        before_revision = results.read_bytes()
         failed_chapters = _revise_failed(config, subset_dir, results, qa_results, failed_chapters)
+        translation_changed = results.read_bytes() != before_revision
         qa_report = evaluate_qa_results(
             qa_results,
             thresholds=config.qa_thresholds,
@@ -345,16 +405,8 @@ def run_batch(config: BatchConfig) -> BatchReport:
         return BatchReport(validation.completed, qa_report.passed, qa_report.failed, 0, 0, 0, next_glossary)
 
     post_results = bd / "post-glossary.results.jsonl"
-    if not (config.chain and config.incremental_glossary):
-        post_tasks = bd / "post-glossary.tasks.jsonl"
-        write_post_translation_glossary_tasks(
-            source_dir=config.source_dir,
-            translation_results_jsonl=results,
-            glossary_csv=config.glossary_csv,
-            out_jsonl=post_tasks,
-            glossary_subset_dir=subset_dir,
-        )
-        _run_stage(config, post_tasks, post_results, config.support_profile)
+    if translation_changed or not (config.chain and config.incremental_glossary):
+        post_results = _prepare_glossary_review(config, results, qa_tasks)
     candidates_csv = bd / "glossary-candidates.csv"
     feedback = write_glossary_candidates(post_results, candidates_csv)
 

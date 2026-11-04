@@ -6,6 +6,7 @@ The project runner orchestrates reusable translation/glossary utilities. It read
 |---|---|
 | `project_cli`, `project_config` | small public workflow and saved settings |
 | `project_workflow`, `project_storage` | bootstrap, missing chapters, hashes, lock, resume |
+| `project_revision` | chapter-local feedback, backed-up revision attempts, QA and replacement |
 | `book_inputs`, `book_export` | text/EPUB input and TXT/EPUB/ZIP output |
 | `prompt_profiles` | language/style/template adaptation across all LLM stages |
 | `batch_pipeline`, `revision`, `qa_gate` | translation, complete QA coverage, revision, acceptance |
@@ -21,8 +22,10 @@ The project runner orchestrates reusable translation/glossary utilities. It read
 - Continuation chains start with existing target context, then include prior generated chapters.
 - Deterministic guards participate in revision: wrong numbering, short bodies and Chinese residue in configured non-CJK targets cannot pass on high model scores alone.
 - Accepted provenance stores the exact full source hash, output hash, configuration fingerprint and QA scores. Cache reuse requires the current inputs and output to match.
-- Only a complete accepted book is packaged. Supplied target chapters remain trusted input, with sampled alignment rather than full editorial QA.
+- Only a complete accepted book is packaged. Supplied target chapters remain trusted input, with sampled alignment rather than full editorial QA, unless explicitly revised with `revise`.
+- Chapter revisions share the project lock and quality gates, preserve the prior text/checkpoint, and replace only the selected chapter after QA. Reader feedback reaches translation, QA and automatic repairs without changing the project fingerprint or canonical glossary. Resume preserves accepted revisions of both generated and supplied chapters.
 - Seed/canonical glossary versions are preserved; proposed conflicts do not silently rename established entities.
+- QA receives provisional glossary candidates extracted from the current draft, including the first fresh chapter. After automatic repair, candidates are refreshed before QA and only terms from the accepted version enter the next glossary.
 - RanobeLib imports normalize soft line wraps and Unicode spacing inside prose text. HTML paragraph/inline tags, attributes and explicit breaks are preserved; ProseMirror `hardBreak` stays explicit. Formatting in pre/code blocks is retained.
 - Reader POST creates a chapter. Unknown outcomes are reconciled from inventory, and repeated sync verifies existing content. Cached/generating audio requires explicit archival before text replacement. Per-chapter audio jobs use no temporary TTL.
 - Telemetry counts each new request attempt, including rejected outputs and revisions; saved results are cache hits, with no new token spend. Incomplete token/cost totals are null, with known subtotals and coverage kept separately.

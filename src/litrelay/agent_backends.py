@@ -23,7 +23,7 @@ class BackendError(RuntimeError):
         self.reported_cost_usd = cost
 
 
-def _cli_argv(backend: str, model: str | None) -> list[str]:
+def _cli_argv(backend: str, model: str | None, reasoning_effort: str = "low") -> list[str]:
     if backend == "claude":
         # --max-turns 1 + --disallowedTools stop the agentic loop that otherwise hangs
         # on evaluation-style prompts. Empty --mcp-config disables MCP servers. --bare is
@@ -56,16 +56,18 @@ def _cli_argv(backend: str, model: str | None) -> list[str]:
             "--sandbox",
             "read-only",
             "-c",
-            "model_reasoning_effort=low",
+            f"model_reasoning_effort={reasoning_effort}",
         ]
         return argv + (["-m", model] if model else [])
     raise KeyError(backend)
 
 
-def make_requester(backend: str, model: str | None, timeout: int) -> Callable[[dict[str, Any]], dict[str, Any]] | None:
+def make_requester(
+    backend: str, model: str | None, timeout: int, *, reasoning_effort: str | None = None
+) -> Callable[[dict[str, Any]], dict[str, Any]] | None:
     if backend == "openai":
         return None
-    return build_cli_requester(backend, model=model, timeout=timeout)
+    return build_cli_requester(backend, model=model, timeout=timeout, reasoning_effort=reasoning_effort or "low")
 
 
 def build_cli_requester(
@@ -75,8 +77,9 @@ def build_cli_requester(
     command: list[str] | None = None,
     timeout: int = 900,
     runner: CliRunner | None = None,
+    reasoning_effort: str = "low",
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
-    argv = command or _cli_argv(backend, model)
+    argv = command or _cli_argv(backend, model, reasoning_effort)
     run = runner or _make_subprocess_runner(timeout)
 
     def requester(payload: dict[str, Any]) -> dict[str, Any]:

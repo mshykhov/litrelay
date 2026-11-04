@@ -29,6 +29,7 @@ class PromptSettings:
     target_language: str
     style: str = ""
     templates: dict[str, str] = field(default_factory=dict)
+    reader_feedback: str = ""
 
 
 def prepare_tasks(path: Path, settings: PromptSettings) -> Path:
@@ -52,6 +53,23 @@ def prepare_tasks(path: Path, settings: PromptSettings) -> Path:
             system + f"\nLanguages: {settings.source_language} -> {settings.target_language}.\nStyle: {settings.style}"
         )
         data = task["input"]
+        if stage == "qa":
+            task["system"] += (
+                "\nAn empty glossary is valid when translating from scratch. Judge newly coined terms "
+                "against the source and their consistency within the chapter; do not deduct points "
+                "merely because no canonical glossary exists yet. Glossary extraction and persistence "
+                "are handled by the pipeline, not by the chapter translator."
+                " When provisional_glossary_candidates are supplied, verify their names and meanings "
+                "against the source and the current translation. These are newly extracted proposals, "
+                "not immutable canonical choices; report wrong proposals for correction before acceptance."
+            )
+        if settings.reader_feedback and stage in {"translation", "qa"}:
+            data["reader_feedback"] = settings.reader_feedback
+            task["system"] += (
+                "\nReader feedback applies only to this chapter. Follow it while preserving source facts "
+                "and canonical glossary choices. During QA, check whether it was addressed; report "
+                "unresolved defects and lower the relevant quality scores."
+            )
         data["source_language"] = settings.source_language
         data["target_language"] = settings.target_language
         if "recent_russian_context" in data:

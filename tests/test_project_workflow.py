@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from litrelay.project_config import initialize_project
+from litrelay.project_revision import revise_project_chapter
 from litrelay.project_workflow import project_status, run_project
 from litrelay.telemetry import latest_summary
 
@@ -253,3 +254,224 @@ def test_debug_cli_preserves_json_stdout_and_stats_never_calls_model(tmp_path: P
     assert run(["stats", "book", "--workspace", str(tmp_path)]) == 0
     assert json.loads(capsys.readouterr().out)["provider_calls"] == count
     assert len(calls) == count
+
+
+def _revision_project(tmp_path: Path, *, max_chapters: int | None = None, revise_attempts: int = 0) -> Path:
+    source = tmp_path / "source"
+    source.mkdir()
+    translation = tmp_path / "translation"
+    translation.mkdir()
+    for n in [1, 2, 3]:
+        (source / f"{n}.txt").write_text(f"第{n}章 光\n\n" + "海边的旅人记录了所有发生的事。" * 15)
+    (translation / "1.txt").write_text("Глава 1. Свет\n\n" + "Существующий перевод первой главы. " * 10)
+    project = tmp_path / "book"
+    initialize_project(project, source=source, translation=translation)
+    config = json.loads((project / "project.json").read_text())
+    config["revise_attempts"] = revise_attempts
+    (project / "project.json").write_text(json.dumps(config))
+    run_project(project, requester=fake_model([]), max_chapters=max_chapters)
+    return project
+
+
+@pytest.mark.parametrize("chapter", [1, 2])
+def test_revision_changes_only_selected_chapter_and_survives_resume(tmp_path: Path, chapter: int) -> None:
+    project = _revision_project(tmp_path)
+    before = project_status(project)
+    files = [project / "project.json", *project.glob("input/**/*.txt"), project / "work/glossary/active.csv"]
+    unchanged = {p: p.read_bytes() for p in files}
+    previous = (project / f"work/accepted/{chapter:04d}.txt").read_text()
+    calls = []
+    base = fake_model(calls)
+
+    def revise(payload):
+        result = base(payload)
+        if payload["metadata"]["agent"] == "translation-agent":
+            data = json.loads(result["output"][0]["content"][0]["text"])
+            data["translation"] += "\nПовествование стало яснее."
+            result["output"][0]["content"][0]["text"] = json.dumps(data)
+        return result
+
+    result = revise_project_chapter(project, chapter=chapter, feedback="Сделай действия понятнее", requester=revise)
+    assert result["complete"] and result["revised_chapter"] == chapter
+    assert Path(result["previous_version"]).read_text() == previous
+    after = project_status(project)
+    for n in before["chapters"]:
+        if int(n) != chapter:
+            assert before["chapters"][n] == after["chapters"][n]
+    assert all(p.read_bytes() == original for p, original in unchanged.items())
+    assert len(calls) == 3
+    assert all(user["chapter_id"] == f"{chapter:04d}" for _, user in calls)
+    assert all(user["reader_feedback"] == "Сделай действия понятнее"
+               for agent, user in calls if agent in {"translation-agent", "translation-qa"})
+    assert calls[0][1]["previous_translation"] == previous
+    assert "Повествование стало яснее" in (project / "output/book.txt").read_text()
+    progress = (project / "work/progress.json").read_bytes()
+    run_project(project, requester=fake_model(calls))
+    assert len(calls) == 3
+    assert (project / "work/progress.json").read_bytes() == progress
+    assert project_status(project)["complete"]
+
+
+def test_from_scratch_bypasses_previous_translation_and_cached_attempts(tmp_path: Path) -> None:
+    project = _revision_project(tmp_path)
+    calls = []
+    first = revise_project_chapter(project, chapter=2, from_scratch=True, requester=fake_model(calls))
+    second = revise_project_chapter(project, chapter=2, from_scratch=True, requester=fake_model(calls))
+    assert len(calls) == 6
+    assert first["revision_dir"] != second["revision_dir"]
+    assert all("previous_translation" not in user for agent, user in calls if agent == "translation-agent")
+
+
+@pytest.mark.parametrize("failure", ["qa", "residue", "provider", "missing_qa", "interrupted"])
+def test_failed_revision_keeps_accepted_text_checkpoint_and_exports(tmp_path: Path, failure: str) -> None:
+    project = _revision_project(tmp_path)
+    paths = [*project.glob("work/accepted/*.txt"), project / "work/progress.json", *project.glob("output/*")]
+    before = {p: p.read_bytes() for p in paths}
+    base = fake_model([])
+
+    def fail(payload):
+        if failure == "provider":
+            raise RuntimeError("Provider unavailable")
+        if failure == "interrupted":
+            raise KeyboardInterrupt
+        result = base(payload)
+        agent = payload["metadata"]["agent"]
+        if failure == "missing_qa" and agent == "translation-qa":
+            raise RuntimeError("QA provider unavailable")
+        data = json.loads(result["output"][0]["content"][0]["text"])
+        if failure == "qa" and agent == "translation-qa":
+            data["meaning_score"] = 1
+        if failure == "residue" and agent == "translation-agent":
+            data["translation"] += "\n安排"
+        result["output"][0]["content"][0]["text"] = json.dumps(data)
+        return result
+
+    with pytest.raises(KeyboardInterrupt if failure == "interrupted" else RuntimeError):
+        revise_project_chapter(project, chapter=2, feedback="Исправь стиль", requester=fail, debug=True)
+    assert all(p.read_bytes() == original for p, original in before.items())
+    assert project_status(project)["complete"]
+    assert not (project / "work/run.lock").exists()
+    backups = list(project.glob("work/revisions/0002/*/previous.txt"))
+    assert len(backups) == 1 and backups[0].read_bytes() == before[project / "work/accepted/0002.txt"]
+    assert latest_summary(project)["status"] == ("interrupted" if failure == "interrupted" else "failed")
+
+
+def test_reader_feedback_survives_automatic_revision_and_qa(tmp_path: Path) -> None:
+    project = _revision_project(tmp_path, revise_attempts=2)
+    calls = []
+    base = fake_model(calls)
+    checks = 0
+
+    def repair(payload):
+        nonlocal checks
+        result = base(payload)
+        if payload["metadata"]["agent"] == "translation-qa":
+            checks += 1
+            if checks == 1:
+                data = json.loads(result["output"][0]["content"][0]["text"])
+                data.update(style_score=10, issues=["Действия неясны"], recommended_action="Уточни действия")
+                result["output"][0]["content"][0]["text"] = json.dumps(data)
+        return result
+
+    result = revise_project_chapter(project, chapter=2, feedback="Уточни действия", requester=repair, debug=True)
+    assert result["complete"] and len(calls) == 5
+    assert all(
+        user["reader_feedback"] == "Уточни действия"
+        for agent, user in calls
+        if agent in {"translation-agent", "translation-qa"}
+    )
+    assert calls[3][1]["qa_issues"] == ["Действия неясны"]
+    assert result["telemetry"]["provider_calls"] == 5
+
+
+def test_revision_of_partial_book_is_used_as_context_for_continuation(tmp_path: Path) -> None:
+    project = _revision_project(tmp_path, max_chapters=1)
+    assert project_status(project)["missing"] == [3]
+    revise_project_chapter(project, chapter=2, feedback="Исправь стиль", requester=fake_model([]))
+    assert not (project / "output/book.zip").exists()
+    calls = []
+    run_project(project, requester=fake_model(calls))
+    translated = [user for agent, user in calls if agent == "translation-agent"]
+    assert len(translated) == 1 and translated[0]["chapter_id"] == "0003"
+    assert any(
+        c["text"] == (project / "work/accepted/0002.txt").read_text() for c in translated[0]["recent_target_context"]
+    )
+
+
+def test_revision_rejects_stale_chapter_missing_feedback_and_project_lock(tmp_path: Path) -> None:
+    from litrelay.project_storage import project_lock
+
+    project = _revision_project(tmp_path, max_chapters=1)
+    with pytest.raises(ValueError, match="feedback"):
+        revise_project_chapter(project, chapter=2, requester=fake_model([]))
+    with pytest.raises(ValueError, match="accepted"):
+        revise_project_chapter(project, chapter=3, from_scratch=True, requester=fake_model([]))
+    with project_lock(project), pytest.raises(RuntimeError, match="already running"):
+        revise_project_chapter(project, chapter=2, from_scratch=True, requester=fake_model([]))
+    chapter = project / "work/accepted/0002.txt"
+    chapter.write_text(chapter.read_text() + "\nРучная правка вне пайплайна.")
+    with pytest.raises(ValueError, match="accepted"):
+        revise_project_chapter(project, chapter=2, from_scratch=True, requester=fake_model([]))
+
+
+def test_revision_cli_reads_feedback_file(tmp_path: Path, capsys, monkeypatch) -> None:
+    from litrelay import project_cli
+    from litrelay.cli import run
+
+    project = _revision_project(tmp_path)
+    calls = []
+    real_revise = project_cli.revise_project_chapter
+    monkeypatch.setattr(
+        project_cli, "revise_project_chapter", lambda *a, **kw: real_revise(*a, **kw, requester=fake_model(calls))
+    )
+    feedback = tmp_path / "feedback.txt"
+    feedback.write_text("Сделай диалог естественнее", encoding="utf-8")
+    assert (
+        run(["revise", "book", "--workspace", str(tmp_path), "--chapter", "2", "--feedback-file", str(feedback)]) == 0
+    )
+    assert json.loads(capsys.readouterr().out)["revised_chapter"] == 2
+    assert calls[0][1]["reader_feedback"] == feedback.read_text()
+    assert project_status(project)["complete"]
+
+
+def test_checkpoint_write_failure_rolls_back_revision(tmp_path: Path, monkeypatch) -> None:
+    from litrelay import project_revision
+
+    project = _revision_project(tmp_path)
+    paths = [*project.glob("work/accepted/*.txt"), project / "work/progress.json", *project.glob("output/*")]
+    before = {p: p.read_bytes() for p in paths}
+    original_write = project_revision.write_json
+    failed = False
+
+    def fail_checkpoint(path, data):
+        nonlocal failed
+        if path == project / "work/progress.json" and not failed:
+            failed = True
+            raise OSError("Checkpoint write failed")
+        return original_write(path, data)
+
+    monkeypatch.setattr(project_revision, "write_json", fail_checkpoint)
+    with pytest.raises(OSError, match="Checkpoint write failed"):
+        revise_project_chapter(project, chapter=1, feedback="Исправь стиль", requester=fake_model([]))
+    assert failed and all(p.read_bytes() == original for p, original in before.items())
+    assert project_status(project)["complete"]
+
+
+def test_source_change_during_revision_prevents_acceptance(tmp_path: Path) -> None:
+    project = _revision_project(tmp_path)
+    accepted = project / "work/accepted/0002.txt"
+    previous = accepted.read_bytes()
+    progress = (project / "work/progress.json").read_bytes()
+    base = fake_model([])
+
+    def change_source(payload):
+        result = base(payload)
+        if payload["metadata"]["agent"] == "translation-agent":
+            source = project / "input/source/0002.txt"
+            source.write_text(source.read_text() + "\n新的事实。")
+        return result
+
+    with pytest.raises(RuntimeError, match="Project changed"):
+        revise_project_chapter(project, chapter=2, feedback="Исправь стиль", requester=change_source)
+    assert accepted.read_bytes() == previous
+    assert (project / "work/progress.json").read_bytes() == progress
