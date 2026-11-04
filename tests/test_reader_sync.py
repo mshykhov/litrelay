@@ -15,7 +15,7 @@ def service():
     def call(method, path, data=None):
         calls.append((method, path, data))
         if method == "GET" and path.endswith("/chapters"):
-            return list(rows.values())
+            return [{key: row[key] for key in ("id", "title", "book", "status")} for row in rows.values()]
         if method == "POST" and path.endswith("/chapters"):
             cid = len(rows) + 10
             row = {**data, "id": cid, "book": 1}

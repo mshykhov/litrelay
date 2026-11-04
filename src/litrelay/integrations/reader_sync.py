@@ -84,11 +84,18 @@ def sync_chapters(
         if heading_number(payload["title"]) != n:
             raise ValueError(f"Chapter {n}: Reader needs a numbered heading")
         row = current.get(n)
+        fresh = False
+        if row:
+            row = call("GET", f"/chapters/{row['id']}", None)
+            if row["book"] != book_id or heading_number(row["title"]) != n:
+                raise RuntimeError(f"Remote chapter mapping mismatch {n}")
+            fresh = True
         if row and (
             _norm(row["content"]) != _norm(payload["content"])
             or _norm(row["title"]) != _norm(payload["title"])
             or row["status"] != status
         ):
+            fresh = False
             cached = call("GET", f"/audio-status/{row['id']}", None)
             if _norm(row["content"]) != _norm(payload["content"]) and (
                 cached["ready"] or cached["state"] == "generating"
@@ -107,11 +114,13 @@ def sync_chapters(
                 row = call("POST", f"/books/{book_id}/chapters", {**payload, "position": len(current)})
             except (OSError, ValueError):
                 recovered = inventory().get(n)
+                if recovered is not None:
+                    recovered = call("GET", f"/chapters/{recovered['id']}", None)
                 if recovered is None or _norm(recovered["content"]) != _norm(payload["content"]):
                     raise
                 row = recovered
         current[n] = row
-        live = call("GET", f"/chapters/{row['id']}", None)
+        live = row if fresh else call("GET", f"/chapters/{row['id']}", None)
         if (
             live["book"] != book_id
             or live["status"] != status
