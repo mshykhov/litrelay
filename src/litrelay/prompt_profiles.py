@@ -61,7 +61,15 @@ def prepare_tasks(path: Path, settings: PromptSettings) -> Path:
                 "are handled by the pipeline, not by the chapter translator."
                 " When provisional_glossary_candidates are supplied, verify their names and meanings "
                 "against the source and the current translation. These are newly extracted proposals, "
-                "not immutable canonical choices; report wrong proposals for correction before acceptance."
+                "not immutable canonical choices. Score only the translated chapter, including terminology "
+                "actually used in it. Put concerns about canonical glossary notes or provisional proposals "
+                "alone in glossary_issues for a human editor, not in issues or missing_or_changed_facts, "
+                "and do not lower chapter scores for those concerns. Canonical notes can rely on wider "
+                "chapters; absence of supporting evidence in this chapter is not a translation defect. "
+                "The translator cannot change the canonical glossary. Approved proper names may be "
+                "localized concisely; do not require every source morpheme in a name. Wrong entities "
+                "or meanings in the translated chapter remain translation defects and affect scores. "
+                "Use issues, missing_or_changed_facts and recommended_action only for translation fixes."
             )
         if settings.reader_feedback and stage in {"translation", "qa"}:
             data["reader_feedback"] = settings.reader_feedback

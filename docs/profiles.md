@@ -16,6 +16,10 @@ Without a translation or seed, LitRelay prepares a source-based glossary before 
 
 The default sequential mode discovers new terms after each chapter and injects them into the next chapter's glossary. QA sees draft candidates before acceptance; revisions refresh those candidates. Previously translated target chapters also supply style/context.
 
+Optionally set `preflight_glossary` to `true` in project.json to extract source terms absent from the canonical glossary before each batch and review any new proposals. This adds one support model call per batch and a second when review is needed. High-confidence terms enter a staged glossary used for translation and QA; the active glossary updates only after the batch passes QA. Chapter-specific `revise` preserves the active glossary and does not run preflight.
+
+QA scores concern the translated chapter. Editorial concerns about canonical glossary notes or proposed entries alone are reported separately in `glossary_issues`; batch runs save them in `glossary-qa-review-needed.json`. A wrong meaning or entity in the chapter still affects its scores. This prevents a chapter translator from being asked to edit a frozen glossary.
+
 ```bash
 uv run litrelay init book --source original --translation translated --glossary glossary.csv --style-file style.txt --prompts-dir examples/prompts
 ```

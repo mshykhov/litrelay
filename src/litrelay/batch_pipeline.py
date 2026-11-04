@@ -7,7 +7,7 @@ import json
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +66,7 @@ class BatchConfig:
     revise_attempts: int = 0
     chain: bool = False
     incremental_glossary: bool = True
+    preflight_glossary: bool = False
     qa_thresholds: dict[str, float] | None = None
     protected_csv: Path | None = None
     style_guide: Path | None = None
@@ -316,6 +317,10 @@ def run_batch(config: BatchConfig) -> BatchReport:
         raise ValueError("Invalid chapter range")
     bd = config.batch_dir
     bd.mkdir(parents=True, exist_ok=True)
+    if config.preflight_glossary:
+        from litrelay.preflight_glossary import prepare_preflight_glossary
+
+        config = replace(config, glossary_csv=prepare_preflight_glossary(config))
 
     subset_dir = bd / "glossary-subsets"
     write_glossary_subsets(
@@ -396,6 +401,24 @@ def run_batch(config: BatchConfig) -> BatchReport:
             expected_chapter_ids={f"{n:04d}" for n in range(config.start, config.end + 1)},
         )
     failed_chapters = [d.chapter_id for d in qa_report.decisions if d.verdict != "pass"]
+    glossary_issues = []
+    for line in qa_results.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if row.get("status") != "completed":
+            continue
+        try:
+            output = json.loads(row.get("output", ""))
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(output, dict) and output.get("glossary_issues"):
+            glossary_issues.append(
+                {"chapter_id": output.get("chapter_id"), "glossary_issues": output["glossary_issues"]}
+            )
+    (bd / "glossary-qa-review-needed.json").write_text(
+        json.dumps(glossary_issues, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     needs_revision = bd / "needs-revision.txt"
     needs_revision.write_text("".join(f"{chapter}\n" for chapter in failed_chapters), encoding="utf-8")
 

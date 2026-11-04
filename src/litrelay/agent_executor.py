@@ -80,6 +80,7 @@ TRANSLATION_QA_SCHEMA = {
         "strengths": {"type": "array", "items": {"type": "string"}},
         "issues": {"type": "array", "items": {"type": "string"}},
         "missing_or_changed_facts": {"type": "array", "items": {"type": "string"}},
+        "glossary_issues": {"type": "array", "items": {"type": "string"}},
         "recommended_action": {"type": "string"},
     },
     "required": [
@@ -92,6 +93,7 @@ TRANSLATION_QA_SCHEMA = {
         "strengths",
         "issues",
         "missing_or_changed_facts",
+        "glossary_issues",
         "recommended_action",
     ],
     "additionalProperties": False,

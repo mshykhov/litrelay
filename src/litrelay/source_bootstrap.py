@@ -1,3 +1,5 @@
+import csv
+
 from litrelay.agent_results import merge_glossary_results, validate_agent_results
 from litrelay.batch_pipeline import BatchConfig, _run_stage
 from litrelay.glossary_versioning import merge_glossary_version, validate_glossary
@@ -42,8 +44,19 @@ def bootstrap_source_glossary(config: BatchConfig, source: dict[int, str], count
         raise RuntimeError(f"Source glossary review failed; inspect {reviewed}")
     candidates = config.batch_dir / "glossary-source.reviewed.csv"
     merge_glossary_results(reviewed, candidates)
+    with candidates.open(encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        fields = reader.fieldnames
+        rows = list(reader)
+    supported = config.batch_dir / "glossary-source.supported.csv"
+    unsupported = config.batch_dir / "glossary-source.unmatched.csv"
+    for path, matches in [(supported, True), (unsupported, False)]:
+        with path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(row for row in rows if bool(row["source"] and row["source"] in context) == matches)
     merge_glossary_version(
-        candidates,
+        supported,
         config.glossary_csv,
         review_csv=config.batch_dir / "review-needed.csv",
         version="source-bootstrap",
