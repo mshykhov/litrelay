@@ -10,6 +10,7 @@ def service():
     calls = []
     queue = {}
     lose = [True]
+    book = {"id": 1, "status": "draft", "chapter_ids": []}
 
     def call(method, path, data=None):
         calls.append((method, path, data))
@@ -36,7 +37,10 @@ def service():
         if method == "GET" and "/chapters/" in path:
             return rows[int(path.split("/")[-1])]
         if method == "PATCH" and path == "/books/1":
-            return {"chapter_ids": data["chapter_ids"]}
+            book.update(data)
+            return {"id": 1, "status": book["status"]}
+        if method == "GET" and path == "/books/1":
+            return dict(book)
         raise AssertionError((method, path, data))
 
     return call, rows, calls
@@ -76,4 +80,20 @@ def test_changed_text_with_cached_audio_requires_explicit_archive(tmp_path: Path
         raise AssertionError("Mutation must not happen")
 
     with pytest.raises(ValueError, match="archive"):
+        sync_chapters(chapters, book_id=1, call=call, checkpoint=tmp_path / "state.json")
+
+
+def test_sync_checks_persisted_book_instead_of_patch_acknowledgement(tmp_path: Path) -> None:
+    chapters = tmp_path / "chapters"
+    chapters.mkdir()
+    (chapters / "0001.txt").write_text("Глава 1. Начало\n\nПолный текст.")
+    base, _, _ = service()
+
+    def call(method, path, data=None):
+        result = base(method, path, data)
+        if method == "GET" and path == "/books/1":
+            result["chapter_ids"] = [999]
+        return result
+
+    with pytest.raises(RuntimeError, match="order or publication status"):
         sync_chapters(chapters, book_id=1, call=call, checkpoint=tmp_path / "state.json")

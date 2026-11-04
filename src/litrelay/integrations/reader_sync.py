@@ -131,9 +131,10 @@ def sync_chapters(
         result["chapters"][str(n)] = record
         write_json(checkpoint, result)
     ids = [current[n]["id"] for n in sorted(files)]
-    book = call("PATCH", f"/books/{book_id}", {"chapter_ids": ids, "status": status})
-    if book["chapter_ids"] != ids:
-        raise RuntimeError("Reader order mismatch")
+    call("PATCH", f"/books/{book_id}", {"chapter_ids": ids, "status": status})
+    book = call("GET", f"/books/{book_id}", None)
+    if book.get("chapter_ids") != ids or book.get("status") != status:
+        raise RuntimeError("Reader order or publication status mismatch")
     result.update({"complete": True, "order_matches": True, "audio_started": audio})
     write_json(checkpoint, result)
     return result
