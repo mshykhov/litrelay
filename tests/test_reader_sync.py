@@ -77,6 +77,8 @@ def test_changed_text_with_cached_audio_requires_explicit_archive(tmp_path: Path
             ]
         if "audio-status" in path:
             return {"ready": True, "state": "ready", "timed": True, "position": 0}
+        if method == "GET" and path == "/chapters/10":
+            return call("GET", "/books/1/chapters")[0]
         raise AssertionError("Mutation must not happen")
 
     with pytest.raises(ValueError, match="archive"):
@@ -97,3 +99,14 @@ def test_sync_checks_persisted_book_instead_of_patch_acknowledgement(tmp_path: P
 
     with pytest.raises(RuntimeError, match="order or publication status"):
         sync_chapters(chapters, book_id=1, call=call, checkpoint=tmp_path / "state.json")
+
+
+def test_foreign_chapter_mapping_blocks_mutation(tmp_path: Path) -> None:
+    chapters = tmp_path / "chapters"
+    chapters.mkdir()
+    (chapters / "0001.txt").write_text("Глава 1. Начало\n\nНовый текст.")
+    call, rows, calls = service()
+    rows[10] = {"id": 10, "title": "Глава 1. Начало", "content": "Чужая глава", "book": 2, "status": "publish"}
+    with pytest.raises(RuntimeError, match="mapping mismatch"):
+        sync_chapters(chapters, book_id=1, call=call, checkpoint=tmp_path / "state.json")
+    assert not any(method in {"POST", "PATCH"} for method, _, _ in calls)
