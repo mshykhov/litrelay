@@ -11,10 +11,10 @@ from litrelay.agent_results import merge_glossary_results, validate_agent_result
 from litrelay.batch_pipeline import BatchConfig, StageProfile, _run_stage, run_batch
 from litrelay.book_export import export_book
 from litrelay.book_inputs import read_chapters, validate_chapter
-from litrelay.glossary_versioning import merge_glossary_version, validate_glossary
+from litrelay.glossary_versioning import apply_glossary_overrides, merge_glossary_version, validate_glossary
 from litrelay.llm_agent_inputs import build_alignment_task, build_glossary_task, write_jsonl
 from litrelay.project_config import normalize_glossary, read_config
-from litrelay.project_storage import digest, project_lock, write_json
+from litrelay.project_storage import assert_no_pending_term_fix, digest, project_lock, write_json
 from litrelay.prompt_profiles import PromptSettings
 from litrelay.prompts import build_glossary_prompt
 from litrelay.source_bootstrap import bootstrap_source_glossary
@@ -32,7 +32,9 @@ def _require_backends(config: dict) -> None:
             raise RuntimeError(f"Install and sign in to {backend}, or choose another backend in project.json")
 
 
-def _inputs(project: Path) -> tuple[dict, dict[int, str], dict[int, str], str]:
+def _inputs(project: Path, *, allow_pending_term_fix: bool = False) -> tuple[dict, dict[int, str], dict[int, str], str]:
+    if not allow_pending_term_fix:
+        assert_no_pending_term_fix(project)
     config = read_config(project)
     source = read_chapters(project / "input/source", min_chars=config["min_chars"])
     if set(source) != set(range(1, max(source) + 1)):
@@ -45,23 +47,21 @@ def _inputs(project: Path) -> tuple[dict, dict[int, str], dict[int, str], str]:
     if existing.keys() - source.keys():
         raise ValueError("Translation chapter absent from source")
     seed = project / "input/glossary.csv"
-    fingerprint = digest(
-        json.dumps(
-            {
-                "config": config,
-                "source": {n: digest(t) for n, t in source.items()},
-                "translation": {n: digest(t) for n, t in existing.items()},
-                "seed": seed.read_text(encoding="utf-8") if seed.exists() else "",
-            },
-            sort_keys=True,
-            ensure_ascii=False,
-        )
-    )
+    inputs = {
+        "config": config,
+        "source": {n: digest(t) for n, t in source.items()},
+        "translation": {n: digest(t) for n, t in existing.items()},
+        "seed": seed.read_text(encoding="utf-8") if seed.exists() else "",
+    }
+    overrides = project / "input/term-overrides.csv"
+    if overrides.exists():
+        inputs["term_overrides"] = overrides.read_text(encoding="utf-8")
+    fingerprint = digest(json.dumps(inputs, sort_keys=True, ensure_ascii=False))
     return config, source, existing, fingerprint
 
 
-def project_status(project: Path) -> dict:
-    config, source, existing, fp = _inputs(project)
+def project_status(project: Path, *, allow_pending_term_fix: bool = False) -> dict:
+    config, source, existing, fp = _inputs(project, allow_pending_term_fix=allow_pending_term_fix)
     state_path = project / "work/progress.json"
     state = json.loads(state_path.read_text()) if state_path.exists() else {"chapters": {}}
     accepted = {}
@@ -212,6 +212,11 @@ def _bootstrap(
             merge_glossary_version(
                 candidates, glossary, review_csv=batch / "review-needed.csv", version="bootstrap", min_confidence=0.90
             )
+    overrides = project / "input/term-overrides.csv"
+    if overrides.exists():
+        updated = batch / "glossary.overridden.csv"
+        apply_glossary_overrides(glossary, overrides, updated)
+        updated.replace(glossary)
     if not validate_glossary(glossary).ok:
         raise RuntimeError(f"Invalid glossary: {glossary}")
     write_json(
@@ -382,9 +387,9 @@ def _run_project(
         return result
 
 
-def export_project(project: Path) -> dict:
+def export_project(project: Path, *, allow_pending_term_fix: bool = False) -> dict:
     config = read_config(project)
-    status = project_status(project)
+    status = project_status(project, allow_pending_term_fix=allow_pending_term_fix)
     if not status["complete"]:
         raise ValueError(
             f"Book is incomplete; bootstrap_ready={status['bootstrap_ready']}, missing chapters {status['missing'][:20]}"

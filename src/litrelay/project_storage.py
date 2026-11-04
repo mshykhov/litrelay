@@ -12,6 +12,16 @@ def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def assert_no_pending_term_fix(project: Path) -> None:
+    for path in (project / "work/term-fixes").rglob("transaction.json"):
+        try:
+            transaction = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise RuntimeError(f"Unreadable term-fix transaction: {path}") from error
+        if transaction.get("status") == "applying":
+            raise RuntimeError(f"Unfinished term-fix transaction; restore its backup before continuing: {path.parent}")
+
+
 def write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")

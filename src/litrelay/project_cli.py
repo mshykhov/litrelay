@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
+import sys
 from pathlib import Path
 
 from litrelay.project_config import initialize_project
@@ -11,9 +13,24 @@ from litrelay.project_scaffold import _validate_slug
 from litrelay.project_workflow import export_project, project_status, run_project
 from litrelay.prompt_profiles import STYLES
 from litrelay.telemetry import latest_summary
+from litrelay.term_fix_apply import apply_term_fix
+from litrelay.term_fix_batch import TermFixBatchError, fix_terms
+from litrelay.term_fix_plan import propose_term_fix
 
 REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
-COMMANDS = {"init", "run", "revise", "status", "export", "profiles", "reader", "stats"}
+COMMANDS = {
+    "init",
+    "run",
+    "revise",
+    "status",
+    "export",
+    "profiles",
+    "reader",
+    "stats",
+    "fix-term",
+    "fix-terms",
+    "apply-term-fix",
+}
 
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
@@ -65,6 +82,34 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
                 "--log-file", type=Path, help="Append debug events to this JSONL file (implies --debug)"
             )
     subparsers.add_parser("profiles", help="List built-in literary translation profiles")
+    term = subparsers.add_parser("fix-term", help="Plan contextual term replacements without retranslating chapters")
+    term.add_argument("name")
+    term.add_argument("--workspace", type=Path, default=Path("projects"))
+    term.add_argument("--source-term", required=True)
+    term.add_argument("--target", required=True)
+    term.add_argument("--pattern", required=True, help="Regex matching only the target-language spans to replace")
+    term.add_argument("--model")
+    term.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
+    term.add_argument("--review-model", help="Independent reviewer model; defaults to project support model")
+    term.add_argument("--review-reasoning-effort", choices=REASONING_EFFORTS)
+    term.add_argument("--batch-size", type=int, default=64)
+    term.add_argument("--apply", action="store_true", help="Apply a fully validated plan after generation")
+    apply_term = subparsers.add_parser("apply-term-fix", help="Apply a saved term-fix plan without model calls")
+    apply_term.add_argument("name")
+    apply_term.add_argument("--workspace", type=Path, default=Path("projects"))
+    apply_term.add_argument("--plan", type=Path, required=True)
+    terms = subparsers.add_parser(
+        "fix-terms", help="Plan, independently review and optionally apply a list of terminology rules"
+    )
+    terms.add_argument("name")
+    terms.add_argument("--workspace", type=Path, default=Path("projects"))
+    terms.add_argument("--rules", type=Path, required=True, help="CSV: source_term,target,pattern")
+    terms.add_argument("--model")
+    terms.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
+    terms.add_argument("--review-model")
+    terms.add_argument("--review-reasoning-effort", choices=REASONING_EFFORTS)
+    terms.add_argument("--apply", action="store_true")
+    terms.add_argument("--debug", action="store_true")
     reader = subparsers.add_parser("reader", help="Optional Reader CMS delivery integration")
     sync = reader.add_subparsers(dest="reader_command", required=True).add_parser("sync")
     sync.add_argument("name")
@@ -84,6 +129,54 @@ def execute(args: argparse.Namespace) -> int:
             return 0
         _validate_slug(args.name)
         project = args.workspace / args.name
+        if args.command == "fix-terms":
+            with args.rules.open(encoding="utf-8-sig", newline="") as handle:
+                rules = list(csv.DictReader(handle))
+            result = fix_terms(
+                project,
+                rules,
+                apply=args.apply,
+                model=args.model,
+                reasoning_effort=args.reasoning_effort,
+                review_model=args.review_model,
+                review_reasoning_effort=args.review_reasoning_effort,
+                event_handler=(lambda event: print(json.dumps(event, ensure_ascii=False), file=sys.stderr, flush=True))
+                if args.debug
+                else None,
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "fix-term":
+            plan = propose_term_fix(
+                project,
+                args.source_term,
+                args.target,
+                args.pattern,
+                model=args.model,
+                reasoning_effort=args.reasoning_effort,
+                batch_size=args.batch_size,
+                review_model=args.review_model,
+                review_reasoning_effort=args.review_reasoning_effort,
+            )
+            if args.apply:
+                result = apply_term_fix(project, Path(plan["plan_path"]))
+                result = {k: v for k, v in result.items() if k != "accepted_after"}
+            else:
+                result = {
+                    "plan_path": plan["plan_path"],
+                    "matches": len(plan["patches"]),
+                    "uncertain": sum(p["uncertain"] for p in plan["patches"]),
+                    "preview": plan["patches"][:10],
+                    "model": plan["model"],
+                    "reasoning_effort": plan["reasoning_effort"],
+                    "usage": plan["usage"],
+                }
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "apply-term-fix":
+            result = apply_term_fix(project, args.plan)
+            print(json.dumps({k: v for k, v in result.items() if k != "accepted_after"}, ensure_ascii=False, indent=2))
+            return 0
         if args.command == "reader":
             import os
 
@@ -182,6 +275,15 @@ def execute(args: argparse.Namespace) -> int:
             summary["missing_preview"] = summary.pop("missing")[:20]
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         return 0
+    except TermFixBatchError as error:
+        print(
+            json.dumps(
+                {"error": str(error), "completed_source_terms": error.completed_source_terms, "plans": error.plans},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
     except (ValueError, RuntimeError, OSError) as error:
         print(f"Error: {error}")
         return 1

@@ -58,6 +58,21 @@ The chapter must already be accepted under the current inputs/settings. Every re
 
 `--workspace`, `--debug` and `--log-file` work as for `run`. Revisions use the project's backends, models, quality thresholds and repair-attempt limit. They preserve the active glossary. `--reasoning-effort` temporarily overrides translation and repair effort for this command; support stages keep their project setting. It does not modify the project configuration or invalidate other chapters. If packaging fails after chapter acceptance, rebuild it with `litrelay export book`. External Reader delivery remains a separate explicit operation.
 
+## Fix a term without retranslating
+
+```bash
+uv run litrelay fix-term book --source-term 修士 --target культиватор --pattern '(?i)\bсовершенствующ[а-яё]+ся\b' --model gpt-6-luna --reasoning-effort medium
+uv run litrelay apply-term-fix book --plan projects/book/work/term-fixes/ATTEMPT/plan.json
+```
+
+The first command proposes replacements from matches and short surrounding context, then has a fresh reviewer check and correct every proposal. It saves the independently reviewed plan without changing accepted text or glossary. The second command makes no model calls: it verifies the review signature, chapter hashes, offsets, coverage and lack of uncertain decisions, saves backups, updates the canonical term and accepted text, and rebuilds exports for a complete book. Add `--apply` to `fix-term` to run the entire flow automatically. Draft model and reasoning default to the project's support profile; `--review-model` and `--review-reasoning-effort` select the reviewer separately.
+
+For several approved changes, use `litrelay fix-terms book --rules rules.csv --apply`. The CSV columns are `source_term,target,pattern`. Rules execute in order, planning each against the result of the previous rule. If a rule fails or remains uncertain, processing stops and reports which earlier rules were applied. Omitting `--apply` produces previews only; after any applied change, previews based on the previous project state are stale.
+
+The model first chooses grammatical forms within the matched words. If agreement needs neighboring text, only the uncertain spans expand to bounded paragraph windows (at most 1200 characters), with at most two context passes. The application composes these drafts from the original text and existing proposals; a fresh reviewer checks term usage, agreement and preservation of facts. Unresolved referents receive one additional review with the original source chapter (at most 20,000 characters), only for those uncertain items. Remaining uncertainty blocks the entire application. The code also blocks changed numerical facts in context edits. These steps never regenerate full translated chapters.
+
+Plans are rejected if the project or accepted chapters have changed. Original inputs remain untouched. Preferences persist in `input/term-overrides.csv` and are applied to later glossary bootstraps. Existing QA scores retain their original reviewed text hash; editorial history records subsequent term changes. Exceptions roll back local files; backups and the transaction manifest remain available for crash recovery. An unfinished transaction blocks other project operations, preventing accidental full regeneration. Website delivery remains a separate `reader sync` operation.
+
 ## Export
 
 The runner exports only after every source chapter has an accepted target chapter. You can rebuild exports with:

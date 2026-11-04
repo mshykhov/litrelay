@@ -99,6 +99,28 @@ TRANSLATION_QA_SCHEMA = {
     "additionalProperties": False,
 }
 
+TERM_PATCH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "replacements": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "replacement": {"type": "string"},
+                    "uncertain": {"type": "boolean"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["id", "replacement", "uncertain", "reason"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["replacements"],
+    "additionalProperties": False,
+}
+
 
 def build_responses_payload(
     task: dict[str, Any],
@@ -330,6 +352,22 @@ def call_openai_responses(
 
 def _is_valid_output(task: dict[str, Any], output: str) -> bool:
     fmt = task.get("expected_output", {}).get("format")
+    if fmt == "term_patch_json":
+        try:
+            parsed = json.loads(output)
+        except (json.JSONDecodeError, TypeError):
+            return False
+        if not isinstance(parsed, dict) or set(parsed) != {"replacements"} or not isinstance(parsed["replacements"], list):
+            return False
+        return all(
+            isinstance(row, dict)
+            and set(row) == {"id", "replacement", "uncertain", "reason"}
+            and isinstance(row["id"], str)
+            and isinstance(row["replacement"], str)
+            and isinstance(row["uncertain"], bool)
+            and isinstance(row["reason"], str)
+            for row in parsed["replacements"]
+        )
     if fmt == "translation_json":
         try:
             parsed = json.loads(output)
@@ -427,6 +465,8 @@ def _format_for_task(task: dict[str, Any]) -> dict[str, Any]:
             "strict": True,
             "schema": TRANSLATION_QA_SCHEMA,
         }
+    if output_format == "term_patch_json":
+        return {"type": "json_schema", "name": "terminology_patches", "strict": True, "schema": TERM_PATCH_SCHEMA}
     return {"type": "text"}
 
 

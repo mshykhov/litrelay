@@ -32,7 +32,9 @@ Inputs can be **numbered UTF-8 TXT files**, a combined TXT with numbered heading
 
 Results: `projects/my-book/output/book.{txt,epub,zip}`. Run the same command again to resume; valid accepted chapters do not call the model again. `uv run litrelay status my-book` shows progress without model calls.
 
-To improve one accepted chapter, use `uv run litrelay revise my-book --chapter 7 --feedback "Make the dialogue more natural"`, or add `--from-scratch` to translate it again from the original. The old version is saved, the replacement must pass QA, and other chapters remain accepted. [Chapter revision](docs/usage.md#revise-one-chapter).
+To improve one accepted chapter, use `uv run litrelay revise my-book --chapter 7 --feedback "Make the dialogue more natural"`, or add `--from-scratch` to translate it again from the original. The old version is saved, the replacement must pass QA, and other chapters remain accepted. [Chapter revision](docs/usage.md#revise-chapters).
+
+For terminology changes, `litrelay fix-term` and `fix-terms` propose and independently review contextual replacements, then apply the validated plan with backups and rebuilt exports. They preserve accepted chapters without full retranslations. [Term fixes](docs/usage.md#fix-a-term-without-retranslating).
 
 ## Profiles and terminology
 
