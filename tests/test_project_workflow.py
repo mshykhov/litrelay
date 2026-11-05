@@ -483,3 +483,39 @@ def test_source_change_during_revision_prevents_acceptance(tmp_path: Path) -> No
         revise_project_chapter(project, chapter=2, feedback="Исправь стиль", requester=change_source)
     assert accepted.read_bytes() == previous
     assert (project / "work/progress.json").read_bytes() == progress
+
+
+def test_measurement_profile_renders_custom_units_before_qa_and_export(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "1.txt").write_text(
+        "Chapter 1. Light\n\nThe traveler crossed two to three leagues in a few breaths.", encoding="utf-8"
+    )
+    project = tmp_path / "project"
+    initialize_project(
+        project,
+        source=source,
+        source_language="en",
+        min_chars=20,
+        measurements={"league": {"source": "league", "factor": "5", "symbol": "км", "approximate": True}},
+    )
+    calls = []
+    fake = fake_model(calls)
+
+    def request(payload: dict) -> dict:
+        response = fake(payload)
+        if payload["metadata"]["agent"] == "translation-agent":
+            assert "[[measure:ID:NUMBER]]" in payload["input"][0]["content"]
+            content = response["output"][0]["content"][0]
+            output = json.loads(content["text"])
+            output["translation"] = (
+                "Глава 1. Свет\n\nПутник преодолел две-три лиги[[measure:league:2-3]] за несколько вдохов."
+            )
+            content["text"] = json.dumps(output)
+        return response
+
+    result = run_project(project, requester=request)
+    expected = "две-три лиги [≈10–15 км] за несколько вдохов"
+    assert expected in Path(result["outputs"]["txt"]).read_text()
+    assert expected in next(data["generated_translation"] for agent, data in calls if agent == "translation-qa")
+    assert "[[measure:" not in Path(result["outputs"]["txt"]).read_text()

@@ -1,0 +1,73 @@
+{
+  "shichen": {
+    "source": "时辰",
+    "factor": "2",
+    "symbol": "ч",
+    "approximate": false
+  },
+  "li": {
+    "source": "里",
+    "factor": "0.5",
+    "symbol": "км",
+    "approximate": true
+  },
+  "zhang": {
+    "source": "丈",
+    "factor": "10/3",
+    "symbol": "м",
+    "approximate": true
+  },
+  "chi": {
+    "source": "尺",
+    "factor": "100/3",
+    "symbol": "см",
+    "approximate": true
+  },
+  "cun": {
+    "source": "寸",
+    "factor": "10/3",
+    "symbol": "см",
+    "approximate": true
+  },
+  "jin": {
+    "source": "斤",
+    "factor": "0.5",
+    "symbol": "кг",
+    "approximate": true
+  },
+  "mph": {
+    "source": "miles per hour (mph, 英里每小时)",
+    "from_unit": "mile/hour",
+    "to_unit": "kilometer/hour",
+    "symbol": "км/ч",
+    "approximate": false
+  },
+  "knot": {
+    "source": "knots of speed (节)",
+    "from_unit": "knot",
+    "to_unit": "kilometer/hour",
+    "symbol": "км/ч",
+    "approximate": false
+  },
+  "fahrenheit": {
+    "source": "absolute temperature in Fahrenheit (华氏度)",
+    "from_unit": "degF",
+    "to_unit": "degC",
+    "symbol": "°C",
+    "approximate": false
+  },
+  "fahrenheit_change": {
+    "source": "temperature change in Fahrenheit (华氏度温差)",
+    "from_unit": "delta_degF",
+    "to_unit": "delta_degC",
+    "symbol": "°C",
+    "approximate": false
+  },
+  "kelvin": {
+    "source": "absolute temperature in kelvin (开尔文)",
+    "from_unit": "kelvin",
+    "to_unit": "degC",
+    "symbol": "°C",
+    "approximate": false
+  }
+}

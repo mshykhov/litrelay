@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 
 from litrelay.book_inputs import read_chapters, validate_chapter
 from litrelay.glossary_versioning import validate_glossary
+from litrelay.measurements import validate_measurements
 from litrelay.project_storage import write_json
 from litrelay.prompt_profiles import STYLES
 
@@ -31,7 +32,10 @@ def initialize_project(
     prompts_dir: Path | None = None,
     reasoning_effort: str | None = None,
     support_reasoning_effort: str | None = None,
+    measurements: dict | None = None,
 ) -> dict:
+    if measurements is not None:
+        validate_measurements(measurements)
     if project.exists() and any(project.iterdir()):
         raise ValueError("Project already exists; use run to resume")
     for language in (source_language, target_language):
@@ -105,6 +109,8 @@ def initialize_project(
         config["translation"]["reasoning_effort"] = reasoning_effort
     if support_reasoning_effort is not None:
         config["support"]["reasoning_effort"] = support_reasoning_effort
+    if measurements:
+        config["measurements"] = measurements
     write_json(project / "project.json", config)
     return config
 
@@ -113,6 +119,7 @@ def read_config(project: Path) -> dict:
     config = json.loads((project / "project.json").read_text(encoding="utf-8"))
     if config.get("version") != 1:
         raise ValueError("Unsupported project config version")
+    validate_measurements(config.get("measurements", {}))
     source_count = config.get("bootstrap_source_chapters", 3)
     if type(source_count) is not int or source_count < 1:
         raise ValueError("bootstrap_source_chapters must be a positive integer")

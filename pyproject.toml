@@ -8,7 +8,9 @@ keywords = ["translation", "literature", "epub", "glossary", "llm"]
 classifiers = ["Programming Language :: Python :: 3", "Programming Language :: Python :: 3.12", "Topic :: Text Processing :: Linguistic"]
 description = "Resumable literary translation with stable terminology and portable book exports."
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pint>=0.26.2",
+]
 
 [project.urls]
 Repository = "https://github.com/mshykhov/litrelay"

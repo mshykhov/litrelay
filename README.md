@@ -77,3 +77,13 @@ Reader CMS upload and durable audio generation are a separate, explicitly invoke
 For development: `uv run pytest -q` and `uv build`. Advanced preparation/repair commands remain available through `litrelay --help`; the old `novel-translation` executable is retained as an alias. [Architecture and development](docs/architecture.md).
 
 MIT licensed. No novel texts, credentials or local production data are included in this repository.
+
+For inline unit conversions, pass `--measurements examples/measurements-zh-ru.json` to `litrelay init`. The profile
+is optional and copied into the project configuration. Each entry supplies a source unit, a target unit symbol, and whether the equivalence is approximate.
+Use a positive `factor` (decimal or fraction as a string) for a book-specific ratio, or `from_unit` and
+`to_unit` for Pint conversions such as `mile/hour` to `kilometer/hour`. Use `degF` to `degC` for
+absolute temperature and `delta_degF` to `delta_degC` for temperature changes.
+The translator identifies quantities in context and the pipeline computes annotations before QA and export.
+Profiles work with any source and target language. Use book-specific factors for fictional or historical
+measures. The Chinese example uses conventional values for reading, with approximate equivalents for length
+and mass. Vague durations such as a few breaths are kept in prose.

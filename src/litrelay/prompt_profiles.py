@@ -30,6 +30,7 @@ class PromptSettings:
     style: str = ""
     templates: dict[str, str] = field(default_factory=dict)
     reader_feedback: str = ""
+    measurements: dict = field(default_factory=dict)
 
 
 def prepare_tasks(path: Path, settings: PromptSettings) -> Path:
@@ -71,6 +72,25 @@ def prepare_tasks(path: Path, settings: PromptSettings) -> Path:
                 "or meanings in the translated chapter remain translation defects and affect scores. "
                 "Use issues, missing_or_changed_facts and recommended_action only for translation fixes."
             )
+        if settings.measurements and stage in {"translation", "qa"}:
+            data["measurements"] = settings.measurements
+            if stage == "translation":
+                task["system"] += (
+                    "\nKeep the original unit and amount in natural prose. After each explicit measurable "
+                    "quantity covered by the profile, append [[measure:ID:NUMBER]] directly after its unit. "
+                    "Use the profile key and ORIGINAL numeric amount, with a decimal point and sign as needed. Distinguish absolute temperature from a temperature change. "
+                    "Preserve bounds using >, <, ≥ or ≤ before the number, estimates using ~, and ranges "
+                    "as LOWER-UPPER. For example: two leagues[[measure:league:2]] when league is a profile key. "
+                    "The renderer inserts the computed brackets. Replace old conversion brackets when revising. "
+                    "Skip idioms, names, breaths, and vague durations or quantities without a numeric value."
+                )
+            else:
+                task["system"] += (
+                    "\nThe configured measurement equivalents in brackets are approved reader annotations. "
+                    "Check them against the source quantity and profile, including bounds and ranges. "
+                    "Report missing or incorrect equivalents for explicit quantities covered by the profile. "
+                    "Do not require equivalents for idioms, breaths, or unquantified measures."
+                )
         if settings.reader_feedback and stage in {"translation", "qa"}:
             data["reader_feedback"] = settings.reader_feedback
             task["system"] += (

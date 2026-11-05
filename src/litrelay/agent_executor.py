@@ -176,6 +176,7 @@ def run_agent_tasks(
     concurrency: int = 1,
     max_retries: int = 0,
     task_timeout: float | None = None,
+    transform_output: Callable[[dict, str], str] | None = None,
     event_handler: Callable[[dict[str, Any]], None] | None = None,
 ) -> AgentRunSummary:
     output_jsonl.parent.mkdir(parents=True, exist_ok=True)
@@ -234,6 +235,13 @@ def run_agent_tasks(
                     }
                 )
             result = _run_single_task(task, payload, requester)
+            if transform_output is not None and result["status"] == "completed":
+                try:
+                    result["output"] = transform_output(task, result["output"])
+                except ValueError as error:
+                    result["output"] = ""
+                    result["error"] = str(error)
+                    result["error_code"] = "invalid_transformed_output"
             valid = result["status"] == "completed" and _is_valid_output(task, result["output"])
             usages.append(result.get("usage", {}))
             if event_handler:
@@ -258,6 +266,8 @@ def run_agent_tasks(
                 )
             if result["status"] != "completed" or valid:
                 break
+        if result.get("error_code") == "invalid_transformed_output":
+            result["status"] = "error"
         result["attempts"] = attempt
         result["attempt_usage"] = usages
         result["total_duration_ms"] = int((time.monotonic() - started) * 1000)

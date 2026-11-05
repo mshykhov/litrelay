@@ -48,6 +48,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     init.add_argument("--prompts-dir", type=Path)
     init.add_argument("--backend", choices=["codex", "claude", "openai"], default="codex")
     init.add_argument("--model", default="gpt-5.5")
+    init.add_argument("--measurements", type=Path, help="JSON profile for inline unit conversions")
     init.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
     init.add_argument("--support-reasoning-effort", choices=REASONING_EFFORTS)
     init.add_argument("--min-chars", type=int, default=100)
@@ -219,6 +220,7 @@ def execute(args: argparse.Namespace) -> int:
                 prompts_dir=args.prompts_dir,
                 reasoning_effort=args.reasoning_effort,
                 support_reasoning_effort=args.support_reasoning_effort,
+                measurements=json.loads(args.measurements.read_text(encoding="utf-8")) if args.measurements else None,
             )
             print(
                 f"Project: {project}\nProfile: {config['profile']}; {config['source_language']} -> {config['target_language']}\nRun: litrelay run {args.name} --workspace {args.workspace}"

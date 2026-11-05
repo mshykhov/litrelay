@@ -121,7 +121,11 @@ def _batch_config(
         chain=config["chain"],
         qa_thresholds=config["qa_thresholds"],
         prompt_settings=PromptSettings(
-            config["source_language"], config["target_language"], config["style"], config["prompts"]
+            config["source_language"],
+            config["target_language"],
+            config["style"],
+            config["prompts"],
+            measurements=config.get("measurements", {}),
         ),
         text_validator=lambda cid, text: validate_chapter(
             int(cid), text, min_chars=config["min_chars"], target_language=config["target_language"]

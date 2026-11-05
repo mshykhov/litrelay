@@ -22,6 +22,7 @@ from litrelay.glossary_reconcile import (
 )
 from litrelay.glossary_subset import write_glossary_subsets
 from litrelay.glossary_versioning import merge_glossary_version
+from litrelay.measurements import render_measurements
 from litrelay.pilot_tasks import write_translation_qa_no_reference_tasks
 from litrelay.post_translation_glossary import write_post_translation_glossary_tasks
 from litrelay.prompt_profiles import PromptSettings, prepare_tasks
@@ -149,6 +150,13 @@ def _execute_stage(config: BatchConfig, tasks: Path, results: Path, profile: Sta
     started = time.monotonic()
     if config.prompt_settings is not None:
         tasks = prepare_tasks(tasks, config.prompt_settings)
+    settings = config.prompt_settings
+
+    def transform(task: dict, output: str) -> str:
+        if task["agent"] == "translation-agent" and settings is not None:
+            return render_measurements(output, settings.measurements, settings.target_language)
+        return output
+
     summary = run_agent_tasks(
         tasks,
         results,
@@ -158,6 +166,7 @@ def _execute_stage(config: BatchConfig, tasks: Path, results: Path, profile: Sta
         max_retries=profile.max_retries,
         reasoning_effort=profile.reasoning_effort,
         event_handler=emit if config.event_handler else None,
+        transform_output=transform if settings and settings.measurements else None,
     )
     emit(
         {
