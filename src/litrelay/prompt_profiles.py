@@ -82,14 +82,17 @@ def prepare_tasks(path: Path, settings: PromptSettings) -> Path:
                     "Preserve bounds using >, <, ≥ or ≤ before the number, estimates using ~, and ranges "
                     "as LOWER-UPPER. For example: two leagues[[measure:league:2]] when league is a profile key. "
                     "The renderer inserts the computed brackets. Replace old conversion brackets when revising. "
-                    "Skip idioms, names, breaths, and vague durations or quantities without a numeric value."
+                    "For a genuine but vague quantity of a unit whose profile defines a label (e.g. hundreds "
+                    "of li), keep the vague wording and append [[measure:ID:unit]] after the unit to explain "
+                    "one unit. Skip idioms, names, breaths, and measures without a suitable profile entry."
                 )
             else:
                 task["system"] += (
                     "\nThe configured measurement equivalents in brackets are approved reader annotations. "
                     "Check them against the source quantity and profile, including bounds and ranges. "
                     "Report missing or incorrect equivalents for explicit quantities covered by the profile. "
-                    "Do not require equivalents for idioms, breaths, or unquantified measures."
+                    "For vague quantities with a labelled profile unit, expect a one-unit gloss without an "
+                    "invented total. Do not require equivalents for idioms or breaths."
                 )
         if settings.reader_feedback and stage in {"translation", "qa"}:
             data["reader_feedback"] = settings.reader_feedback

@@ -3,37 +3,43 @@
     "source": "时辰",
     "factor": "2",
     "symbol": "ч",
-    "approximate": false
+    "approximate": false,
+    "label": "шичэнь"
   },
   "li": {
     "source": "里",
     "factor": "0.5",
     "symbol": "км",
-    "approximate": true
+    "approximate": true,
+    "label": "ли"
   },
   "zhang": {
     "source": "丈",
     "factor": "10/3",
     "symbol": "м",
-    "approximate": true
+    "approximate": true,
+    "label": "чжан"
   },
   "chi": {
     "source": "尺",
     "factor": "100/3",
     "symbol": "см",
-    "approximate": true
+    "approximate": true,
+    "label": "чи"
   },
   "cun": {
     "source": "寸",
     "factor": "10/3",
     "symbol": "см",
-    "approximate": true
+    "approximate": true,
+    "label": "цунь"
   },
   "jin": {
     "source": "斤",
     "factor": "0.5",
     "symbol": "кг",
-    "approximate": true
+    "approximate": true,
+    "label": "цзинь"
   },
   "mph": {
     "source": "miles per hour (mph, 英里每小时)",

@@ -87,3 +87,6 @@ The translator identifies quantities in context and the pipeline computes annota
 Profiles work with any source and target language. Use book-specific factors for fictional or historical
 measures. The Chinese example uses conventional values for reading, with approximate equivalents for length
 and mass. Vague durations such as a few breaths are kept in prose.
+
+An optional `label` enables a one-unit gloss for vague amounts, such as “hundreds of leagues [1 league ≈ 5 km]”.
+Use it for conversions with no offset. The original amount stays vague and idioms stay in prose.

@@ -10,7 +10,7 @@ from pint import UnitRegistry
 from pint.errors import PintError
 
 MARKER = re.compile(
-    r"\[\[measure:([a-z][a-z0-9_]*):([<>=~≤≥]?)(-?\d{1,18}(?:\.\d{1,9})?)(?:-(-?\d{1,18}(?:\.\d{1,9})?))?\]\]"
+    r"\[\[measure:([a-z][a-z0-9_]*):(?:(unit)|([<>=~≤≥]?)(-?\d{1,18}(?:\.\d{1,9})?)(?:-(-?\d{1,18}(?:\.\d{1,9})?))?)\]\]"
 )
 
 
@@ -37,11 +37,12 @@ def validate_measurements(units: dict) -> None:
             not isinstance(key, str)
             or not re.fullmatch(r"[a-z][a-z0-9_]*", key)
             or not isinstance(unit, dict)
-            or set(unit) not in (common | {"factor"}, common | {"from_unit", "to_unit"})
+            or set(unit) - {"label"} not in (common | {"factor"}, common | {"from_unit", "to_unit"})
             or any(
                 not isinstance(value, str) or not value.strip() for name, value in unit.items() if name != "approximate"
             )
             or not re.fullmatch(r"[^\[\]<>\r\n]{1,24}", unit["symbol"])
+            or ("label" in unit and not re.fullmatch(r"[^\[\]<>\r\n]{1,24}", unit["label"]))
             or type(unit["approximate"]) is not bool
         ):
             raise ValueError(f"Invalid measurement definition: {key}")
@@ -49,7 +50,10 @@ def validate_measurements(units: dict) -> None:
             not re.fullmatch(r"\d{1,18}(?:\.\d{1,9}|/[1-9]\d{0,17})?", unit["factor"]) or Fraction(unit["factor"]) <= 0
         ):
             raise ValueError(f"Invalid measurement factor: {key}")
-        if _convert(Fraction(1), unit) <= _convert(Fraction(0), unit):
+        zero = _convert(Fraction(0), unit)
+        if "label" in unit and zero != 0:
+            raise ValueError(f"Unit gloss requires a conversion with no offset: {key}")
+        if _convert(Fraction(1), unit) <= zero:
             raise ValueError(f"Measurement conversion must be increasing: {key}")
 
 
@@ -62,11 +66,14 @@ def render_measurements(output: str, units: dict, language: str) -> str:
         return output
 
     def replace(match: re.Match[str]) -> str:
-        key, qualifier, start, end = match.groups()
+        key, gloss, qualifier, start, end = match.groups()
         if key not in units or (end and (Fraction(end) < Fraction(start) or qualifier not in {"", "=", "~"})):
             raise ValueError(f"Invalid measurement marker: {match[0]}")
         unit = units[key]
-        exact = [_convert(Fraction(n), unit) for n in (start, end) if n is not None]
+        if gloss and "label" not in unit:
+            raise ValueError(f"Missing measurement label: {key}")
+        amounts = ("1",) if gloss else (start, end)
+        exact = [_convert(Fraction(n), unit) for n in amounts if n is not None]
         with localcontext() as ctx:
             ctx.prec = 3 if unit["approximate"] else 6
             rounded = [Decimal(n.numerator) / Decimal(n.denominator) for n in exact]
@@ -80,6 +87,9 @@ def render_measurements(output: str, units: dict, language: str) -> str:
             values = [value.replace(".", ",") for value in values]
         bound = qualifier if qualifier in {"<", ">", "≤", "≥"} else ""
         prefix = bound + ("≈" if approximate else "")
+        if gloss:
+            relation = "≈" if approximate else "="
+            return f" [1 {unit['label']} {relation} {values[0]} {unit['symbol']}]"
         return f" [{prefix}{'–'.join(values)} {unit['symbol']}]"
 
     text = MARKER.sub(replace, data["translation"])

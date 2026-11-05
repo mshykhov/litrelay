@@ -34,3 +34,18 @@ def test_pint_rejects_incompatible_dimensions() -> None:
                 }
             }
         )
+
+
+def test_vague_measurement_gloss_preserves_unspecified_amount() -> None:
+    units = {
+        "li": {
+            "source": "里",
+            "factor": "500",
+            "symbol": "м",
+            "approximate": True,
+            "label": "ли",
+        }
+    }
+    validate_measurements(units)
+    output = json.dumps({"translation": "Сотни ли[[measure:li:unit]] вокруг."})
+    assert json.loads(render_measurements(output, units, "ru"))["translation"] == "Сотни ли [1 ли ≈ 500 м] вокруг."
